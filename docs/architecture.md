@@ -24,11 +24,11 @@ The initial architecture is intentionally small:
 
 - `argus.cli` exposes the command-line interface.
 - `argus.models` contains shared data structures.
-- `argus.collectors` reserves the future boundary for evidence collection.
-- `argus.report` reserves the future boundary for reporting behavior.
+- `argus.collectors` collects read-only evidence from supported sources.
+- `argus.report` renders collected evidence into operator-facing summaries.
 
-There are no collectors, integrations, background processes, databases, or AI
-features in version 0.1.
+Version 0.1 includes Docker and CrowdSec evidence collection. There are no
+background processes, databases, external API integrations, or AI features.
 
 ## Design Principles
 
@@ -40,8 +40,9 @@ features in version 0.1.
 
 ## Version 0.1 Scope
 
-Version 0.1 establishes the project structure, package metadata, placeholder CLI,
-simple evidence model, and architecture documentation.
+Version 0.1 establishes the project structure, package metadata, CLI, simple
+evidence model, Docker collector, CrowdSec collector, and architecture
+documentation.
 
 The only CLI command is:
 
@@ -49,12 +50,13 @@ The only CLI command is:
 argus brief
 ```
 
-It reports that no collectors are configured.
+It collects read-only Docker and CrowdSec evidence and renders a short
+operational summary.
 
 ## Future Roadmap
 
-- Add collector design once initial evidence sources are selected.
-- Implement local, read-only evidence collection.
+- Refine collector design as more evidence sources are selected.
+- Add additional local, read-only evidence collectors.
 - Add correlation and report generation.
 - Expand tests around evidence handling and reporting.
 - Consider AI-assisted explanation after evidence workflows are reliable.

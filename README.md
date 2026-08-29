@@ -20,14 +20,15 @@ real collectors and reporting workflows are introduced later.
 
 Argus is at version 0.1 foundation stage.
 
-Current functionality is limited to a placeholder CLI command:
+Current functionality is limited to Docker and CrowdSec evidence collection
+through local CLI commands:
 
 ```bash
 argus brief
 ```
 
-No collectors, integrations, databases, background workers, API clients, or AI
-features exist yet.
+No additional collectors, integrations, databases, background workers, external
+API clients, or AI features exist yet.
 
 ## Installation
 
@@ -52,7 +53,23 @@ ARGUS v0.1
 
 Evidence-driven Security Operations Copilot
 
-No collectors configured.
+Docker
+✓ Docker installed
+✓ Docker daemon running
+
+Containers
+Total: 6
+Running: 5
+Exited: 1
+Unhealthy: 0
+
+CrowdSec
+✓ CrowdSec available
+✓ CrowdSec container running
+✓ CrowdSec API healthy
+
+CrowdSec Alerts
+Active: 0
 ```
 
 ## Project Goals
@@ -65,8 +82,8 @@ No collectors configured.
 
 ## Planned Roadmap
 
-- Define collector interfaces after real evidence sources are selected.
-- Add local evidence collection from explicitly configured sources.
+- Refine collector interfaces as more evidence sources are selected.
+- Add local evidence collection from explicitly selected sources.
 - Introduce correlation and report generation workflows.
 - Add tests around models, collectors, and reporting behavior as features grow.
 - Evaluate AI-assisted explanation only after evidence handling is mature.
