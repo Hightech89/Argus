@@ -30,6 +30,12 @@ The initial architecture is intentionally small:
 Version 0.1 includes Docker and CrowdSec evidence collection. There are no
 background processes, databases, external API integrations, or AI features.
 
+Version 0.2 introduces `SecurityEvent` in `argus.models` as an immutable
+interpretation of one or more `Evidence` records. It has a timezone-aware
+timestamp, source, flexible category, summary, and a severity from `info`,
+`low`, `medium`, `high`, or `critical`. Supporting evidence is retained as a
+nonempty tuple. Collectors and the `brief` command still use the v0.1 pipeline.
+
 ## Design Principles
 
 - Keep the foundation simple enough to fit on a whiteboard.
