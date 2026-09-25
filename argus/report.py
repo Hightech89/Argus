@@ -45,7 +45,7 @@ def _render_docker_section(records: list[Evidence]) -> list[str]:
         ),
     ]
 
-    if errors and not (installed and daemon_running):
+    if errors:
         lines.extend(["", _clean_error(errors[0])])
 
     if installed and daemon_running:

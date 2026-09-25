@@ -3,12 +3,30 @@
 from __future__ import annotations
 
 import unittest
+from subprocess import CompletedProcess
+from unittest.mock import patch
 
+from argus.collectors import collect_docker_evidence
 from argus.models import Evidence
 from argus.report import BULLET, CHECK, render_brief
 
 
 class RenderBriefTests(unittest.TestCase):
+    def test_renders_container_listing_error_after_successful_daemon_check(self) -> None:
+        responses = [
+            CompletedProcess(["docker"], 0, "Docker version 27.0", ""),
+            CompletedProcess(["docker"], 0, '"27.0"', ""),
+            CompletedProcess(["docker"], 1, "", "permission denied"),
+        ]
+        with patch("argus.collectors.subprocess.run", side_effect=responses) as run:
+            evidence = collect_docker_evidence()
+
+        self.assertEqual(run.call_count, 3)
+        self.assertIn(Evidence("docker.installed", "true"), evidence)
+        self.assertIn(Evidence("docker.daemon_running", "true"), evidence)
+        self.assertIn(Evidence("docker.error", "permission denied"), evidence)
+        self.assertIn("permission denied", render_brief(evidence, "0.1.0"))
+
     def test_renders_container_counts_lists_and_crowdsec_alert(self) -> None:
         evidence = [
             Evidence("docker.installed", "true"),
