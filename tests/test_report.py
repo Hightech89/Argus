@@ -26,7 +26,7 @@ class RenderBriefTests(unittest.TestCase):
         self.assertIn(("docker.installed", "true"), records)
         self.assertIn(("docker.daemon_running", "true"), records)
         self.assertIn(("docker.error", "permission denied"), records)
-        self.assertIn("permission denied", render_brief(evidence, "0.1.0"))
+        self.assertIn("permission denied", render_brief(evidence, "0.2.0"))
 
     def test_renders_container_counts_lists_and_crowdsec_alert(self) -> None:
         evidence = [
@@ -52,10 +52,10 @@ class RenderBriefTests(unittest.TestCase):
         ]
 
         self.assertEqual(
-            render_brief(evidence, "0.1.0"),
+            render_brief(evidence, "0.2.0"),
             "\n".join(
                 [
-                    "ARGUS v0.1",
+                    "ARGUS v0.2",
                     "",
                     "Evidence-driven Security Operations Copilot",
                     "",
@@ -108,10 +108,10 @@ class RenderBriefTests(unittest.TestCase):
         ]
 
         self.assertEqual(
-            render_brief(iter(evidence), "0.1.0"),
+            render_brief(iter(evidence), "0.2.0"),
             "\n".join(
                 [
-                    "ARGUS v0.1",
+                    "ARGUS v0.2",
                     "",
                     "Evidence-driven Security Operations Copilot",
                     "",
@@ -142,7 +142,7 @@ class RenderBriefTests(unittest.TestCase):
             Evidence("crowdsec.alerts.active_count", "0"),
         ]
 
-        report = render_brief(evidence, "0.1.0")
+        report = render_brief(evidence, "0.2.0")
 
         self.assertIn("Total: 0\nRunning: 0\nExited: 0\nUnhealthy: 0", report)
         self.assertIn("Running Containers\nNone", report)

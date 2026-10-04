@@ -1,7 +1,4 @@
-"""Evidence collectors.
-
-Docker and CrowdSec evidence collection are implemented in version 0.1.
-"""
+"""Read-only Docker and CrowdSec evidence collectors."""
 
 from __future__ import annotations
 

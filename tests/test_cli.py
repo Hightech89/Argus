@@ -199,8 +199,18 @@ class BriefCommandRegressionTests(unittest.TestCase):
         crowdsec_collector.assert_called_once_with()
         renderer.assert_called_once_with(
             docker_evidence,
-            version="0.1.0",
+            version="0.2.0",
         )
+
+    def test_brief_uses_release_version_in_runtime_output(self) -> None:
+        with (
+            patch("argus.cli.collect_docker_evidence", return_value=[]),
+            patch("argus.cli.collect_crowdsec_evidence", return_value=[]),
+        ):
+            result = CliRunner().invoke(app, ["brief"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertTrue(result.output.startswith("ARGUS v0.2\n"), result.output)
 
 
 if __name__ == "__main__":

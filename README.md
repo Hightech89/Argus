@@ -1,92 +1,124 @@
 # Argus
 
 Argus is an evidence-driven Security Operations (SOC) copilot for Home SOC
-environments.
+environments. It collects read-only evidence from security tools and presents
+deterministic, traceable operational summaries for a human operator.
 
-Argus collects and organizes evidence, correlates information, explains
-findings, and recommends next steps. It is designed to support investigation
-and operator judgment, not to make changes on its own.
+Argus does not make autonomous changes. Version 0.2.0 has no AI, persistence,
+database, background monitoring, correlation, or automated response features.
 
 ## Philosophy
 
-Argus is built around evidence first. Every finding should be traceable to
-observable information from a known source.
+Argus starts with observable evidence from known sources. Interpretation and
+reporting remain deterministic, and supporting evidence stays attached to each
+security event.
 
-The project favors simple, explicit architecture over early abstraction. The
-foundation should be easy to understand, easy to test, and easy to extend when
-real collectors and reporting workflows are introduced later.
+The architecture is intentionally small and explicit so its behavior is easy to
+understand, test, and audit.
 
-## Current Status
+## Version 0.2.0
 
-Argus includes the version 0.1 operational brief and the deterministic version
-0.2 CrowdSec Daily Security Brief pipeline:
+The current read-only collectors are:
 
-```bash
-argus brief
-argus daily
+- Docker
+- CrowdSec
+
+Two CLI commands are available:
+
+- `argus brief` reports current Docker and CrowdSec operational status.
+- `argus daily` produces a deterministic rolling 24-hour CrowdSec security
+  activity brief.
+
+The Daily Security Brief pipeline is:
+
+```text
+CrowdSec
+-> Evidence
+-> SecurityEvent
+-> EventWindow
+-> DailySecurityBrief
+-> renderer
 ```
 
-`argus brief` reports current Docker and CrowdSec operational status.
-`argus daily` reports CrowdSec security activity from a rolling 24-hour window.
+`SOURCE` timestamps represent known event occurrence time. When CrowdSec does
+not provide a usable event timestamp, Argus uses the Evidence collection time
+with an `OBSERVED` timestamp basis. Observed-time fallback alerts are displayed
+separately so they are not presented as known occurrence-time events.
 
-No additional collectors, integrations, databases, background workers, external
-API clients, or AI features exist yet.
+Docker contributes operational status to `argus brief`; Docker security events
+are not implemented.
 
 ## Installation
 
-Installation packaging is intentionally minimal at this stage.
-
-For local development, install the project in editable mode:
+Use a virtual environment for local installation:
 
 ```bash
+python -m venv .venv
+```
+
+Activate it on Windows:
+
+```powershell
+.venv\Scripts\activate
+```
+
+Or activate it on Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+Then install Argus in editable mode:
+
+```bash
+python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-## Example CLI Usage
+Debian-family distributions may block system-level pip installation in an
+externally managed Python environment. A virtual environment is the preferred
+installation path and avoids modifying the system Python installation.
+
+## CLI Usage
 
 ```bash
 argus brief
 argus daily
 ```
 
-Representative `argus brief` output:
+Representative `argus brief` header:
 
 ```text
-ARGUS v0.1
+ARGUS v0.2
 
 Evidence-driven Security Operations Copilot
-
-Docker
-✓ Docker installed
-✓ Docker daemon running
-
-Containers
-Total: 6
-Running: 5
-Exited: 1
-Unhealthy: 0
-
-CrowdSec
-✓ CrowdSec available
-✓ CrowdSec container running
-✓ CrowdSec API healthy
-
-CrowdSec Alerts
-Active: 0
 ```
+
+Both commands use local Docker access. `argus daily` reads CrowdSec telemetry
+through the existing CrowdSec container and does not require a separate API
+integration.
+
+## Testing
+
+Run the complete automated test suite with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The automated tests mock subprocess and collector boundaries and do not require
+live Docker or CrowdSec services.
 
 ## Project Goals
 
-- Provide a clear foundation for a Home SOC investigation assistant.
-- Keep evidence and findings explainable.
-- Avoid autonomous system changes.
-- Keep early architecture simple enough to fit on a whiteboard.
-- Grow through clean organization before introducing new abstractions.
+- Keep every interpreted event traceable to collected evidence.
+- Prefer deterministic code over optional higher-level interpretation.
+- Preserve read-only operation and human control.
+- Keep the architecture simple enough to inspect and test thoroughly.
 
-## Planned Roadmap
+## Future Roadmap
 
-- Refine collector interfaces as more evidence sources are selected.
-- Add local evidence collection from explicitly selected sources.
-- Introduce correlation and report generation workflows.
-- Add tests around models, collectors, and reporting behavior as features grow.
-- Evaluate AI-assisted explanation only after evidence handling is mature.
+- Refine deterministic collection and reporting based on Home SOC usage.
+- Expand read-only evidence coverage when concrete operational needs justify it.
+- Evaluate broader analysis capabilities only after their evidence and policy
+  requirements are clear.
