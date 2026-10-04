@@ -18,14 +18,16 @@ real collectors and reporting workflows are introduced later.
 
 ## Current Status
 
-Argus is at version 0.1 foundation stage.
-
-Current functionality is limited to Docker and CrowdSec evidence collection
-through local CLI commands:
+Argus includes the version 0.1 operational brief and the deterministic version
+0.2 CrowdSec Daily Security Brief pipeline:
 
 ```bash
 argus brief
+argus daily
 ```
+
+`argus brief` reports current Docker and CrowdSec operational status.
+`argus daily` reports CrowdSec security activity from a rolling 24-hour window.
 
 No additional collectors, integrations, databases, background workers, external
 API clients, or AI features exist yet.
@@ -44,9 +46,10 @@ python -m pip install -e .
 
 ```bash
 argus brief
+argus daily
 ```
 
-Expected output:
+Representative `argus brief` output:
 
 ```text
 ARGUS v0.1

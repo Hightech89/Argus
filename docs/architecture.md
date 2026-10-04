@@ -62,6 +62,10 @@ time are selected separately because their actual occurrence time is unknown.
 The deterministic data flow is `Evidence` -> `SecurityEvent` -> `EventWindow`
 -> `DailySecurityBrief` -> `argus.report` renderer.
 
+`argus brief` presents current Docker and CrowdSec operational status. `argus
+daily` orchestrates the CrowdSec pipeline above for a rolling 24-hour security
+activity brief.
+
 ## Design Principles
 
 - Keep the foundation simple enough to fit on a whiteboard.
@@ -76,7 +80,7 @@ Version 0.1 establishes the project structure, package metadata, CLI, simple
 evidence model, Docker collector, CrowdSec collector, and architecture
 documentation.
 
-The only CLI command is:
+The operational status command is:
 
 ```bash
 argus brief
