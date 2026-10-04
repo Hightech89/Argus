@@ -26,6 +26,7 @@ The initial architecture is intentionally small:
 - `argus.models` contains shared data structures.
 - `argus.collectors` collects read-only evidence from supported sources.
 - `argus.events` deterministically interprets evidence as security events.
+- `argus.analysis` applies deterministic event selection and analysis policies.
 - `argus.report` renders collected evidence into operator-facing summaries.
 
 Version 0.1 includes Docker and CrowdSec evidence collection. There are no
@@ -54,6 +55,10 @@ CrowdSec collection also preserves every parsed alert atomically as a compact,
 deterministic JSON `crowdsec.alert.raw` Evidence record before interpretation.
 The event interpretation layer can convert those records into ordered,
 independently traceable `SecurityEvent` objects without mixing alert fields.
+
+Rolling windows use inclusive cutoff and current-time boundaries. Events with
+source timestamps are selected as known occurrences; events using observation
+time are selected separately because their actual occurrence time is unknown.
 
 ## Design Principles
 
