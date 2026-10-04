@@ -42,6 +42,10 @@ class RenderBriefTests(unittest.TestCase):
             Evidence("crowdsec.api_healthy", "true"),
             Evidence("crowdsec.container_health", "healthy"),
             Evidence("crowdsec.alerts.active_count", "1"),
+            Evidence(
+                "crowdsec.alert.raw",
+                '{"id":42,"message":"SSH brute force","scenario":"ssh-bf"}',
+            ),
             Evidence("crowdsec.alert.latest", "42: ssh-bf"),
             Evidence("crowdsec.alert.latest_reason", "SSH brute force"),
             Evidence("crowdsec.alert.latest_timestamp", "2026-08-29T10:05:00Z"),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 from collections.abc import Iterable
@@ -65,6 +66,39 @@ class CrowdSecCollectorTests(unittest.TestCase):
         self.assertEqual(records["crowdsec.api_healthy"], "true")
         self.assertEqual(records["crowdsec.alerts.active_count"], "0")
         self.assertNotIn("crowdsec.alert.latest", records)
+        self.assertEqual(_contents(evidence, "crowdsec.alert.raw"), [])
+        self.assert_observed(evidence)
+
+    def test_one_alert_creates_one_deterministic_raw_record(self) -> None:
+        alert = {
+            "scenario": "crowdsecurity/ssh-bf",
+            "id": 10,
+            "source": {"scope": "Ip", "ip": "203.0.113.10"},
+            "created_at": "2026-08-29T10:00:00Z",
+        }
+        runner = _DockerRunner(
+            {
+                _docker_ps_command(): _completed("crowdsec\trunning\tUp 3 hours"),
+                _lapi_status_command(): _completed("OK"),
+                _alerts_command(): _completed(json.dumps([alert])),
+            }
+        )
+
+        with patch("argus.collectors.subprocess.run", side_effect=runner):
+            evidence = collect_crowdsec_evidence()
+
+        raw = [
+            record for record in evidence if record.source == "crowdsec.alert.raw"
+        ]
+        self.assertEqual(len(raw), 1)
+        self.assertEqual(
+            raw[0].content,
+            '{"created_at":"2026-08-29T10:00:00Z","id":10,'
+            '"scenario":"crowdsecurity/ssh-bf",'
+            '"source":{"ip":"203.0.113.10","scope":"Ip"}}',
+        )
+        self.assertEqual(json.loads(raw[0].content), alert)
+        self.assertIs(raw[0].observed_at, _OBSERVED_AT)
         self.assert_observed(evidence)
 
     def test_crowdsec_active_alerts(self) -> None:
@@ -107,7 +141,50 @@ class CrowdSecCollectorTests(unittest.TestCase):
         self.assertEqual(
             records["crowdsec.alert.latest_timestamp"], "2026-08-29T10:05:00Z"
         )
+        raw = _contents(evidence, "crowdsec.alert.raw")
+        self.assertEqual(len(raw), 2)
+        self.assertEqual(json.loads(raw[0])["id"], 10)
+        self.assertEqual(json.loads(raw[0])["message"], "SSH brute force from 203.0.113.10")
+        self.assertEqual(json.loads(raw[1])["id"], 11)
+        self.assertEqual(json.loads(raw[1])["message"], "HTTP probing from 198.51.100.20")
+        raw_records = [
+            record for record in evidence if record.source == "crowdsec.alert.raw"
+        ]
+        self.assertTrue(
+            all(record.observed_at is _OBSERVED_AT for record in raw_records)
+        )
         self.assertNotEqual(records["crowdsec.alert.latest_timestamp"], _OBSERVED_AT.isoformat())
+        self.assert_observed(evidence)
+
+    def test_non_dict_alert_entries_are_ignored(self) -> None:
+        alerts = json.dumps(
+            [
+                "invalid",
+                {"id": 12, "scenario": "crowdsecurity/ssh-bf"},
+                None,
+                42,
+            ]
+        )
+        runner = _DockerRunner(
+            {
+                _docker_ps_command(): _completed("crowdsec\trunning\tUp 3 hours"),
+                _lapi_status_command(): _completed("OK"),
+                _alerts_command(): _completed(alerts),
+            }
+        )
+
+        with patch("argus.collectors.subprocess.run", side_effect=runner):
+            evidence = collect_crowdsec_evidence()
+
+        records = _records(evidence)
+        self.assertEqual(records["crowdsec.alerts.active_count"], "1")
+        self.assertEqual(
+            _contents(evidence, "crowdsec.alert.raw"),
+            ['{"id":12,"scenario":"crowdsecurity/ssh-bf"}'],
+        )
+        self.assertEqual(
+            records["crowdsec.alert.latest"], "12: crowdsecurity/ssh-bf"
+        )
         self.assert_observed(evidence)
 
     def test_docker_listing_error_is_observed(self) -> None:
@@ -203,6 +280,10 @@ def _alerts_command() -> tuple[str, ...]:
 
 def _records(evidence: Iterable[Evidence]) -> dict[str, str]:
     return {record.source: record.content for record in evidence}
+
+
+def _contents(evidence: Iterable[Evidence], source: str) -> list[str]:
+    return [record.content for record in evidence if record.source == source]
 
 
 if __name__ == "__main__":

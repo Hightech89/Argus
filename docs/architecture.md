@@ -49,6 +49,9 @@ one `SecurityEvent`. It uses the source-native alert timestamp when valid and
 falls back to a timezone-aware evidence observation time. Only evidence that
 directly describes the latest alert is attached to the event.
 
+CrowdSec collection also preserves every parsed alert atomically as a compact,
+deterministic JSON `crowdsec.alert.raw` Evidence record before interpretation.
+
 ## Design Principles
 
 - Keep the foundation simple enough to fit on a whiteboard.

@@ -137,6 +137,14 @@ def collect_crowdsec_evidence() -> list[Evidence]:
     evidence.append(
         Evidence(source="crowdsec.alerts.active_count", content=str(len(alerts)), observed_at=observed_at)
     )
+    for alert in alerts:
+        evidence.append(
+            Evidence(
+                source="crowdsec.alert.raw",
+                content=json.dumps(alert, sort_keys=True, separators=(",", ":")),
+                observed_at=observed_at,
+            )
+        )
 
     latest_alert = _latest_alert(alerts)
     if latest_alert is not None:
