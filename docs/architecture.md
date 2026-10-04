@@ -51,6 +51,8 @@ directly describes the latest alert is attached to the event.
 
 CrowdSec collection also preserves every parsed alert atomically as a compact,
 deterministic JSON `crowdsec.alert.raw` Evidence record before interpretation.
+The event interpretation layer can convert those records into ordered,
+independently traceable `SecurityEvent` objects without mixing alert fields.
 
 ## Design Principles
 
