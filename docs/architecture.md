@@ -60,7 +60,7 @@ Rolling windows use inclusive cutoff and current-time boundaries. Events with
 source timestamps are selected as known occurrences; events using observation
 time are selected separately because their actual occurrence time is unknown.
 The deterministic data flow is `Evidence` -> `SecurityEvent` -> `EventWindow`
--> `DailySecurityBrief` -> future renderer.
+-> `DailySecurityBrief` -> `argus.report` renderer.
 
 ## Design Principles
 

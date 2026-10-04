@@ -4,10 +4,52 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from argus.models import Evidence
+from argus.analysis import DailySecurityBrief
+from argus.models import Evidence, SecurityEvent, Severity
 
 CHECK = "\u2713"
 BULLET = "\u2022"
+
+
+def render_daily_security_brief(brief: DailySecurityBrief) -> str:
+    """Render precomputed Daily Security Brief data for an operator."""
+    lines = [
+        "ARGUS DAILY SECURITY BRIEF",
+        "",
+        "Window",
+        f"{brief.window_start.isoformat()} -> {brief.window_end.isoformat()}",
+        "",
+    ]
+    lines.extend(
+        _render_daily_event_group(
+            title="Known Security Events",
+            total=brief.occurred_count,
+            severity_counts=brief.occurred_severity_counts,
+            category_counts=brief.occurred_category_counts,
+            event_title="Recent Events",
+            events=brief.occurred,
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "Observed - Event Time Unknown",
+            f"Total: {brief.observed_count}",
+            "",
+            "These alerts were observed during the window, but their true occurrence",
+            "time could not be determined.",
+            "",
+        ]
+    )
+    lines.extend(
+        _render_daily_details(
+            severity_counts=brief.observed_severity_counts,
+            category_counts=brief.observed_category_counts,
+            event_title="Observed Alerts",
+            events=brief.observed,
+        )
+    )
+    return "\n".join(lines)
 
 
 def render_brief(evidence: Iterable[Evidence], version: str) -> str:
@@ -24,6 +66,52 @@ def render_brief(evidence: Iterable[Evidence], version: str) -> str:
     lines.extend(_render_crowdsec_section(records))
 
     return "\n".join(lines)
+
+
+def _render_daily_event_group(
+    *,
+    title: str,
+    total: int,
+    severity_counts: tuple[tuple[Severity, int], ...],
+    category_counts: tuple[tuple[str, int], ...],
+    event_title: str,
+    events: tuple[SecurityEvent, ...],
+) -> list[str]:
+    return [title, f"Total: {total}", ""] + _render_daily_details(
+        severity_counts=severity_counts,
+        category_counts=category_counts,
+        event_title=event_title,
+        events=events,
+    )
+
+
+def _render_daily_details(
+    *,
+    severity_counts: tuple[tuple[Severity, int], ...],
+    category_counts: tuple[tuple[str, int], ...],
+    event_title: str,
+    events: tuple[SecurityEvent, ...],
+) -> list[str]:
+    lines = ["Severity"]
+    lines.extend(
+        f"{severity.value.capitalize()}: {count}"
+        for severity, count in severity_counts
+    )
+    lines.extend(["", "Categories"])
+    if category_counts:
+        lines.extend(f"{category}: {count}" for category, count in category_counts)
+    else:
+        lines.append("None")
+
+    lines.extend(["", event_title])
+    if events:
+        lines.extend(
+            f"{BULLET} {event.timestamp.isoformat()} | {event.severity.value} | {event.summary}"
+            for event in events
+        )
+    else:
+        lines.append("None")
+    return lines
 
 
 def _render_docker_section(records: list[Evidence]) -> list[str]:
