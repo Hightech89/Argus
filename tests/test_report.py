@@ -22,9 +22,10 @@ class RenderBriefTests(unittest.TestCase):
             evidence = collect_docker_evidence()
 
         self.assertEqual(run.call_count, 3)
-        self.assertIn(Evidence("docker.installed", "true"), evidence)
-        self.assertIn(Evidence("docker.daemon_running", "true"), evidence)
-        self.assertIn(Evidence("docker.error", "permission denied"), evidence)
+        records = {(record.source, record.content) for record in evidence}
+        self.assertIn(("docker.installed", "true"), records)
+        self.assertIn(("docker.daemon_running", "true"), records)
+        self.assertIn(("docker.error", "permission denied"), records)
         self.assertIn("permission denied", render_brief(evidence, "0.1.0"))
 
     def test_renders_container_counts_lists_and_crowdsec_alert(self) -> None:

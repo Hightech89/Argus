@@ -5,13 +5,21 @@ from __future__ import annotations
 import subprocess
 import unittest
 from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from argus.collectors import collect_crowdsec_evidence
 from argus.models import Evidence
 
+_OBSERVED_AT = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+
 
 class CrowdSecCollectorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clock = patch("argus.collectors._utc_now", return_value=_OBSERVED_AT)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+
     def test_crowdsec_unavailable_when_docker_cli_is_missing(self) -> None:
         with patch("argus.collectors.subprocess.run", side_effect=FileNotFoundError):
             evidence = collect_crowdsec_evidence()
@@ -21,6 +29,7 @@ class CrowdSecCollectorTests(unittest.TestCase):
         self.assertEqual(records["crowdsec.container_running"], "false")
         self.assertEqual(records["crowdsec.api_healthy"], "false")
         self.assertEqual(records["crowdsec.error"], "Docker CLI not found.")
+        self.assert_observed(evidence)
 
     def test_crowdsec_unavailable_when_container_is_missing(self) -> None:
         runner = _DockerRunner({_docker_ps_command(): _completed("")})
@@ -33,6 +42,7 @@ class CrowdSecCollectorTests(unittest.TestCase):
         self.assertEqual(records["crowdsec.container_running"], "false")
         self.assertEqual(records["crowdsec.api_healthy"], "false")
         self.assertEqual(records["crowdsec.alerts.active_count"], "0")
+        self.assert_observed(evidence)
 
     def test_crowdsec_zero_alerts(self) -> None:
         runner = _DockerRunner(
@@ -55,6 +65,7 @@ class CrowdSecCollectorTests(unittest.TestCase):
         self.assertEqual(records["crowdsec.api_healthy"], "true")
         self.assertEqual(records["crowdsec.alerts.active_count"], "0")
         self.assertNotIn("crowdsec.alert.latest", records)
+        self.assert_observed(evidence)
 
     def test_crowdsec_active_alerts(self) -> None:
         alerts = """
@@ -96,6 +107,57 @@ class CrowdSecCollectorTests(unittest.TestCase):
         self.assertEqual(
             records["crowdsec.alert.latest_timestamp"], "2026-08-29T10:05:00Z"
         )
+        self.assertNotEqual(records["crowdsec.alert.latest_timestamp"], _OBSERVED_AT.isoformat())
+        self.assert_observed(evidence)
+
+    def test_docker_listing_error_is_observed(self) -> None:
+        runner = _DockerRunner({_docker_ps_command(): _completed(stderr="denied", returncode=1)})
+        with patch("argus.collectors.subprocess.run", side_effect=runner):
+            evidence = collect_crowdsec_evidence()
+
+        self.assertEqual(_records(evidence)["crowdsec.error"], "denied")
+        self.assert_observed(evidence)
+
+    def test_lapi_error_is_observed(self) -> None:
+        runner = _DockerRunner({
+            _docker_ps_command(): _completed("crowdsec\trunning\tUp 3 hours"),
+            _lapi_status_command(): _completed(stderr="LAPI unavailable", returncode=1),
+        })
+        with patch("argus.collectors.subprocess.run", side_effect=runner):
+            evidence = collect_crowdsec_evidence()
+
+        self.assertEqual(_records(evidence)["crowdsec.error"], "LAPI unavailable")
+        self.assert_observed(evidence)
+
+    def test_alert_listing_error_is_observed(self) -> None:
+        runner = _DockerRunner({
+            _docker_ps_command(): _completed("crowdsec\trunning\tUp 3 hours"),
+            _lapi_status_command(): _completed("OK"),
+            _alerts_command(): _completed(stderr="alerts unavailable", returncode=1),
+        })
+        with patch("argus.collectors.subprocess.run", side_effect=runner):
+            evidence = collect_crowdsec_evidence()
+
+        self.assertEqual(_records(evidence)["crowdsec.error"], "alerts unavailable")
+        self.assert_observed(evidence)
+
+    def test_collection_timestamp_is_captured_before_docker_commands(self) -> None:
+        def run(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+            self.clock.assert_called_once_with()
+            return _completed(stderr="Docker unavailable", returncode=1)
+
+        with patch("argus.collectors.subprocess.run", side_effect=run):
+            evidence = collect_crowdsec_evidence()
+
+        self.assert_observed(evidence)
+
+    def assert_observed(self, evidence: list[Evidence]) -> None:
+        self.assertTrue(evidence)
+        self.clock.assert_called_once_with()
+        for record in evidence:
+            self.assertIs(record.observed_at, _OBSERVED_AT)
+            self.assertIsNotNone(record.observed_at.tzinfo)
+            self.assertEqual(record.observed_at.utcoffset(), timedelta(0))
 
 
 class _DockerRunner:
