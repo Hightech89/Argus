@@ -6,7 +6,7 @@ import unittest
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 
-from argus.models import Evidence, SecurityEvent, Severity
+from argus.models import Evidence, SecurityEvent, Severity, TimestampBasis
 
 
 _TIMESTAMP = datetime(2026, 9, 24, 14, 30, tzinfo=timezone.utc)
@@ -16,6 +16,7 @@ _EVIDENCE = Evidence("crowdsec.alert.latest", "42: ssh-bf", _TIMESTAMP)
 def _event(**overrides: object) -> SecurityEvent:
     fields: dict[str, object] = {
         "timestamp": _TIMESTAMP,
+        "timestamp_basis": TimestampBasis.SOURCE,
         "source": "crowdsec",
         "category": "authentication",
         "severity": Severity.HIGH,
@@ -31,6 +32,7 @@ class SecurityEventTests(unittest.TestCase):
         event = _event()
 
         self.assertEqual(event.timestamp, _TIMESTAMP)
+        self.assertIs(event.timestamp_basis, TimestampBasis.SOURCE)
         self.assertEqual(event.source, "crowdsec")
         self.assertEqual(event.category, "authentication")
         self.assertIs(event.severity, Severity.HIGH)
@@ -62,6 +64,28 @@ class SecurityEventTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             _event(severity="high")
 
+    def test_timestamp_basis_has_stable_values_and_rejects_strings(self) -> None:
+        self.assertEqual(
+            [str(basis) for basis in TimestampBasis], ["source", "observed"]
+        )
+        self.assertIs(TimestampBasis("source"), TimestampBasis.SOURCE)
+        self.assertIs(TimestampBasis("observed"), TimestampBasis.OBSERVED)
+        with self.assertRaises(ValueError):
+            TimestampBasis("inferred")
+        with self.assertRaises(TypeError):
+            _event(timestamp_basis="source")
+
+    def test_requires_timestamp_basis(self) -> None:
+        with self.assertRaises(TypeError):
+            SecurityEvent(
+                timestamp=_TIMESTAMP,
+                source="crowdsec",
+                category="intrusion",
+                severity=Severity.MEDIUM,
+                summary="SSH brute force",
+                evidence=(_EVIDENCE,),
+            )
+
     def test_requires_at_least_one_evidence_record(self) -> None:
         with self.assertRaises(ValueError):
             _event(evidence=())
@@ -77,6 +101,8 @@ class SecurityEventTests(unittest.TestCase):
 
         with self.assertRaises(FrozenInstanceError):
             event.summary = "Changed"
+        with self.assertRaises(FrozenInstanceError):
+            event.timestamp_basis = TimestampBasis.OBSERVED
         with self.assertRaises(FrozenInstanceError):
             event.evidence[0].content = "Changed"
 

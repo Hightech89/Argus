@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
-from argus.models import Evidence, SecurityEvent, Severity
+from argus.models import Evidence, SecurityEvent, Severity, TimestampBasis
 
 _CROWDSEC_LATEST = "crowdsec.alert.latest"
 _CROWDSEC_LATEST_REASON = "crowdsec.alert.latest_reason"
@@ -32,18 +32,18 @@ def crowdsec_events_from_evidence(
             continue
 
         timestamp = _raw_alert_timestamp(alert)
-        if (
-            timestamp is None
-            and record.observed_at is not None
-            and _is_aware(record.observed_at)
-        ):
+        if timestamp is not None:
+            timestamp_basis = TimestampBasis.SOURCE
+        elif record.observed_at is not None and _is_aware(record.observed_at):
             timestamp = record.observed_at
-        if timestamp is None:
+            timestamp_basis = TimestampBasis.OBSERVED
+        else:
             continue
 
         events.append(
             SecurityEvent(
                 timestamp=timestamp,
+                timestamp_basis=timestamp_basis,
                 source="crowdsec",
                 category="intrusion",
                 severity=Severity.MEDIUM,
@@ -73,14 +73,18 @@ def crowdsec_event_from_evidence(
     timestamp = None
     if native_timestamp is not None:
         timestamp = _parse_aware_datetime(native_timestamp.content)
-    if timestamp is None:
+    if timestamp is not None:
+        timestamp_basis = TimestampBasis.SOURCE
+    else:
         timestamp = _first_aware_observation(supporting_evidence)
-    if timestamp is None:
-        return None
+        if timestamp is None:
+            return None
+        timestamp_basis = TimestampBasis.OBSERVED
 
     summary = reason.content if reason is not None and reason.content else latest.content
     return SecurityEvent(
         timestamp=timestamp,
+        timestamp_basis=timestamp_basis,
         source="crowdsec",
         category="intrusion",
         severity=Severity.MEDIUM,

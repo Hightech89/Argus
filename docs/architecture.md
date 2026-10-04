@@ -40,9 +40,10 @@ nonempty tuple. Collectors and the `brief` command still use the v0.1 pipeline.
 `Evidence.observed_at` is the timezone-aware UTC time Argus began a collector
 invocation. Every record from that invocation shares the same observation time;
 the field remains optional for evidence created outside the live collectors.
-`SecurityEvent.timestamp` represents the best-known time the underlying event
-occurred. A CrowdSec alert's native timestamp is event time and remains in its
-evidence content; it is not replaced by the Argus observation time.
+`SecurityEvent.timestamp` uses source-native event time when available and a
+timezone-aware Evidence observation time as its fallback. Its required
+`timestamp_basis` records whether the value came from the underlying source
+(`source`) or from Evidence observation time (`observed`).
 
 The first event interpretation converts the latest CrowdSec alert evidence into
 one `SecurityEvent`. It uses the source-native alert timestamp when valid and

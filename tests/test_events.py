@@ -7,7 +7,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from argus.events import crowdsec_event_from_evidence, crowdsec_events_from_evidence
-from argus.models import Evidence, Severity
+from argus.models import Evidence, Severity, TimestampBasis
 
 _OBSERVED_AT = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
 
@@ -51,6 +51,7 @@ class CrowdSecRawEventsTests(unittest.TestCase):
         self.assertEqual(
             event.timestamp, datetime(2026, 10, 3, 11, 45, tzinfo=timezone.utc)
         )
+        self.assertIs(event.timestamp_basis, TimestampBasis.SOURCE)
         self.assertIs(event.timestamp.tzinfo, timezone.utc)
         self.assertEqual(event.evidence, (record,))
         self.assertIs(event.evidence[0], record)
@@ -134,6 +135,7 @@ class CrowdSecRawEventsTests(unittest.TestCase):
         event = crowdsec_events_from_evidence([record])[0]
 
         self.assertIs(event.timestamp, _OBSERVED_AT)
+        self.assertIs(event.timestamp_basis, TimestampBasis.OBSERVED)
 
     def test_naive_or_unusable_native_timestamp_uses_observed_at(self) -> None:
         for value in ("2026-10-03T11:45:00", "not-a-timestamp", 42):
@@ -142,6 +144,7 @@ class CrowdSecRawEventsTests(unittest.TestCase):
                     [_raw({"created_at": value})]
                 )[0]
                 self.assertIs(event.timestamp, _OBSERVED_AT)
+                self.assertIs(event.timestamp_basis, TimestampBasis.OBSERVED)
 
     def test_invalid_json_and_non_object_json_are_skipped(self) -> None:
         valid = _raw({"message": "Valid alert"})
@@ -203,6 +206,7 @@ class CrowdSecEventTests(unittest.TestCase):
         self.assertEqual(
             event.timestamp, datetime(2026, 10, 3, 11, 45, tzinfo=timezone.utc)
         )
+        self.assertIs(event.timestamp_basis, TimestampBasis.SOURCE)
         self.assertIs(event.timestamp.tzinfo, timezone.utc)
         self.assertEqual(event.evidence, (latest, reason, timestamp))
         self.assertIs(event.evidence[0], latest)
@@ -219,6 +223,7 @@ class CrowdSecEventTests(unittest.TestCase):
         self.assertIsNotNone(event)
         self.assertEqual(event.summary, latest.content)
         self.assertEqual(event.timestamp, _OBSERVED_AT)
+        self.assertIs(event.timestamp_basis, TimestampBasis.OBSERVED)
         self.assertEqual(event.evidence, (latest,))
 
     def test_native_timestamp_with_offset_is_preserved(self) -> None:
@@ -232,6 +237,7 @@ class CrowdSecEventTests(unittest.TestCase):
 
         self.assertIsNotNone(event)
         self.assertEqual(event.timestamp, datetime.fromisoformat(native_time))
+        self.assertIs(event.timestamp_basis, TimestampBasis.SOURCE)
         self.assertEqual(event.timestamp.utcoffset(), timedelta(hours=-5))
 
     def test_missing_latest_alert_returns_none(self) -> None:
@@ -256,6 +262,7 @@ class CrowdSecEventTests(unittest.TestCase):
 
         self.assertIsNotNone(event)
         self.assertIs(event.timestamp, _OBSERVED_AT)
+        self.assertIs(event.timestamp_basis, TimestampBasis.OBSERVED)
 
     def test_unusable_native_timestamp_uses_aware_observed_at(self) -> None:
         evidence = [
@@ -269,6 +276,7 @@ class CrowdSecEventTests(unittest.TestCase):
 
         self.assertIsNotNone(event)
         self.assertIs(event.timestamp, _OBSERVED_AT)
+        self.assertIs(event.timestamp_basis, TimestampBasis.OBSERVED)
 
     def test_naive_native_timestamp_uses_aware_observed_at(self) -> None:
         evidence = [
@@ -284,6 +292,7 @@ class CrowdSecEventTests(unittest.TestCase):
 
         self.assertIsNotNone(event)
         self.assertIs(event.timestamp, _OBSERVED_AT)
+        self.assertIs(event.timestamp_basis, TimestampBasis.OBSERVED)
 
     def test_unusable_timestamp_without_aware_fallback_returns_none(self) -> None:
         naive_observation = datetime(2026, 10, 3, 12, 0)

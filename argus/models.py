@@ -24,11 +24,19 @@ class Severity(StrEnum):
     CRITICAL = "critical"
 
 
+class TimestampBasis(StrEnum):
+    """Origin of a security event's timestamp."""
+
+    SOURCE = "source"
+    OBSERVED = "observed"
+
+
 @dataclass(frozen=True)
 class SecurityEvent:
     """An interpreted event backed by one or more evidence records."""
 
     timestamp: datetime
+    timestamp_basis: TimestampBasis
     source: str
     category: str
     severity: Severity
@@ -40,6 +48,8 @@ class SecurityEvent:
             raise TypeError("timestamp must be a datetime")
         if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:
             raise ValueError("timestamp must be timezone-aware")
+        if not isinstance(self.timestamp_basis, TimestampBasis):
+            raise TypeError("timestamp_basis must be a TimestampBasis value")
         if not isinstance(self.severity, Severity):
             raise TypeError("severity must be a Severity value")
         if not isinstance(self.evidence, tuple):
