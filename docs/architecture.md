@@ -25,6 +25,7 @@ The initial architecture is intentionally small:
 - `argus.cli` exposes the command-line interface.
 - `argus.models` contains shared data structures.
 - `argus.collectors` collects read-only evidence from supported sources.
+- `argus.events` deterministically interprets evidence as security events.
 - `argus.report` renders collected evidence into operator-facing summaries.
 
 Version 0.1 includes Docker and CrowdSec evidence collection. There are no
@@ -42,6 +43,11 @@ the field remains optional for evidence created outside the live collectors.
 `SecurityEvent.timestamp` represents the best-known time the underlying event
 occurred. A CrowdSec alert's native timestamp is event time and remains in its
 evidence content; it is not replaced by the Argus observation time.
+
+The first event interpretation converts the latest CrowdSec alert evidence into
+one `SecurityEvent`. It uses the source-native alert timestamp when valid and
+falls back to a timezone-aware evidence observation time. Only evidence that
+directly describes the latest alert is attached to the event.
 
 ## Design Principles
 
