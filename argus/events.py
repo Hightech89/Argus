@@ -49,6 +49,7 @@ def crowdsec_events_from_evidence(
                 severity=Severity.MEDIUM,
                 summary=_raw_alert_summary(alert),
                 evidence=(record,),
+                details=_raw_alert_details(alert),
             )
         )
 
@@ -118,6 +119,83 @@ def _raw_alert_timestamp(alert: dict[str, Any]) -> datetime | None:
         timestamp = _parse_aware_datetime(alert.get(field))
         if timestamp is not None:
             return timestamp
+    return None
+
+
+def _raw_alert_details(alert: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """Extract CrowdSec context in a fixed, documented semantic order."""
+    source = alert.get("source")
+    source = source if isinstance(source, dict) else {}
+    decision = _first_decision(alert.get("decisions"))
+
+    candidates = (
+        ("alert_id", (alert.get("id"),)),
+        ("scenario", (alert.get("scenario"),)),
+        (
+            "source_scope",
+            (source.get("scope"), alert.get("source_scope"), alert.get("scope")),
+        ),
+        (
+            "source_value",
+            (
+                source.get("value"),
+                source.get("ip"),
+                alert.get("source_value"),
+                alert.get("source_ip"),
+                alert.get("value"),
+                alert.get("ip"),
+            ),
+        ),
+        (
+            "country",
+            (
+                source.get("cn"),
+                source.get("country"),
+                alert.get("country"),
+                alert.get("cn"),
+            ),
+        ),
+        ("as_number", (source.get("as_number"), alert.get("as_number"))),
+        ("as_name", (source.get("as_name"), alert.get("as_name"))),
+        ("event_count", (alert.get("events_count"), alert.get("event_count"))),
+        (
+            "machine",
+            (
+                alert.get("machine_id"),
+                alert.get("machine_name"),
+                alert.get("machine"),
+            ),
+        ),
+        ("start_at", (alert.get("start_at"),)),
+        ("stop_at", (alert.get("stop_at"),)),
+        ("decision_type", (decision.get("type"),)),
+        ("decision_scope", (decision.get("scope"),)),
+        ("decision_value", (decision.get("value"),)),
+        ("decision_duration", (decision.get("duration"),)),
+    )
+
+    details: list[tuple[str, str]] = []
+    for key, values in candidates:
+        value = _first_detail_value(values)
+        if value is not None:
+            details.append((key, value))
+    return tuple(details)
+
+
+def _first_decision(value: object) -> dict[str, Any]:
+    if not isinstance(value, list):
+        return {}
+    return next((item for item in value if isinstance(item, dict)), {})
+
+
+def _first_detail_value(values: tuple[object, ...]) -> str | None:
+    for value in values:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
     return None
 
 

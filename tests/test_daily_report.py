@@ -21,6 +21,7 @@ def _event(
     timestamp: datetime | None = None,
     severity: Severity = Severity.MEDIUM,
     category: str = "intrusion",
+    details: tuple[tuple[str, str], ...] = (),
 ) -> SecurityEvent:
     event_time = timestamp or (_END - timedelta(hours=1))
     return SecurityEvent(
@@ -31,6 +32,7 @@ def _event(
         severity=severity,
         summary=summary,
         evidence=(Evidence("test.event", summary, _END),),
+        details=details,
     )
 
 
@@ -186,6 +188,50 @@ class DailySecurityBriefRendererTests(unittest.TestCase):
         report = render_daily_security_brief(_brief(occurred=(event,)))
 
         self.assertIn("2026-10-03T06:30:00-05:00 | medium | Offset event", report)
+
+    def test_event_details_render_beneath_their_event_in_supplied_order(self) -> None:
+        event = _event(
+            "SSH brute force",
+            basis=TimestampBasis.SOURCE,
+            details=(
+                ("scenario", "crowdsecurity/ssh-bf"),
+                ("source_scope", "Ip"),
+                ("source_value", "203.0.113.42"),
+                ("country", "US"),
+                ("as_number", "AS12345"),
+                ("as_name", "Example Network"),
+                ("event_count", "31"),
+                ("decision_type", "ban"),
+                ("decision_duration", "4h"),
+            ),
+        )
+
+        report = render_daily_security_brief(_brief(occurred=(event,)))
+
+        expected = "\n".join(
+            [
+                f"{BULLET} 2026-10-03T11:00:00+00:00 | medium | SSH brute force",
+                "  Scenario: crowdsecurity/ssh-bf",
+                "  Source: Ip 203.0.113.42",
+                "  Country: US",
+                "  ASN: AS12345 Example Network",
+                "  Events: 31",
+                "  Decision: ban",
+                "  Decision Duration: 4h",
+            ]
+        )
+        self.assertIn(expected, report)
+
+    def test_event_without_details_has_no_detail_lines(self) -> None:
+        event = _event("Plain alert", basis=TimestampBasis.SOURCE)
+
+        report = render_daily_security_brief(_brief(occurred=(event,)))
+
+        self.assertIn(
+            f"{BULLET} 2026-10-03T11:00:00+00:00 | medium | Plain alert",
+            report,
+        )
+        self.assertNotIn("  Scenario:", report)
 
     def test_renderer_does_not_mutate_brief_or_events(self) -> None:
         event = _event("Unchanged summary", basis=TimestampBasis.SOURCE)

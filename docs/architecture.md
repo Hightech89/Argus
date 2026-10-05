@@ -37,7 +37,9 @@ features.
 interpretation of one or more `Evidence` records. It has a timezone-aware
 timestamp, source, flexible category, summary, and a severity from `info`,
 `low`, `medium`, `high`, or `critical`. Supporting evidence is retained as a
-nonempty tuple.
+nonempty tuple. Its optional `details` field is an immutable tuple of string
+key-value tuples. This generic representation can carry source-specific context
+without adding CrowdSec fields to the shared event model.
 
 `Evidence.observed_at` is the timezone-aware UTC time Argus began a collector
 invocation. Every record from that invocation shares the same observation time;
@@ -51,6 +53,18 @@ CrowdSec collection preserves every parsed alert atomically as a compact,
 deterministic JSON `crowdsec.alert.raw` Evidence record before interpretation.
 The event interpretation layer can convert those records into ordered,
 independently traceable `SecurityEvent` objects without mixing alert fields.
+For CrowdSec events, it extracts usable scalar values already present in the
+alert or its nested `source` object. The fixed detail order is `alert_id`,
+`scenario`, `source_scope`, `source_value`, `country`, `as_number`, `as_name`,
+`event_count`, `machine`, `start_at`, `stop_at`, `decision_type`,
+`decision_scope`, `decision_value`, and `decision_duration`. If a decisions
+array is present, the first decision object supplies decision details. Missing,
+blank, structured, or otherwise unusable optional values are omitted. The raw
+Evidence record remains unchanged and attached to the event.
+
+The Daily Security Brief renderer reads only `SecurityEvent.details` when it
+shows indented context beneath an event. It does not parse supporting Evidence,
+alter summaries, or change aggregation counts.
 
 Rolling windows use inclusive cutoff and current-time boundaries. Events with
 source timestamps are selected as known occurrences; events using observation

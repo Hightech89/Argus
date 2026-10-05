@@ -48,6 +48,12 @@ separately so they are not presented as known occurrence-time events.
 Docker contributes operational status to `argus brief`; Docker security events
 are not implemented.
 
+Version 0.3 development enriches CrowdSec `SecurityEvent` records with
+structured alert context already supplied by CrowdSec, such as source,
+network, event-count, machine, timing, and decision details. The Daily Security
+Brief displays only the context present in each alert and retains the original
+raw Evidence for traceability.
+
 ## Installation
 
 Use a virtual environment for local installation:

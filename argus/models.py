@@ -42,6 +42,7 @@ class SecurityEvent:
     severity: Severity
     summary: str
     evidence: tuple[Evidence, ...]
+    details: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.timestamp, datetime):
@@ -58,3 +59,11 @@ class SecurityEvent:
             raise ValueError("evidence must contain at least one Evidence record")
         if any(not isinstance(record, Evidence) for record in self.evidence):
             raise TypeError("evidence must contain only Evidence records")
+        if not isinstance(self.details, tuple):
+            raise TypeError("details must be a tuple of string pairs")
+        for detail in self.details:
+            if not isinstance(detail, tuple) or len(detail) != 2:
+                raise TypeError("details must contain only key-value tuples")
+            key, value = detail
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise TypeError("detail keys and values must be strings")

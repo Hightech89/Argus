@@ -11,6 +11,38 @@ from argus.models import Evidence, Severity, TimestampBasis
 
 _OBSERVED_AT = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
 
+_MINIMAL_ALERT = {
+    "created_at": "2026-10-03T11:45:00Z",
+    "message": "Minimal CrowdSec alert",
+}
+
+_ENRICHED_ALERT = {
+    "id": 42,
+    "created_at": "2026-10-03T11:45:00Z",
+    "message": "SSH brute force",
+    "scenario": "crowdsecurity/ssh-bf",
+    "source": {
+        "scope": "Ip",
+        "value": "203.0.113.42",
+        "ip": "203.0.113.42",
+        "cn": "US",
+        "as_number": 12345,
+        "as_name": "Example Network",
+    },
+    "events_count": 31,
+    "machine_id": "home-soc-crowdsec",
+    "start_at": "2026-10-03T11:40:00Z",
+    "stop_at": "2026-10-03T11:44:30Z",
+    "decisions": [
+        {
+            "type": "ban",
+            "scope": "Ip",
+            "value": "203.0.113.42",
+            "duration": "4h",
+        }
+    ],
+}
+
 
 def _raw(alert: object, observed_at: datetime | None = _OBSERVED_AT) -> Evidence:
     return Evidence(
@@ -55,6 +87,97 @@ class CrowdSecRawEventsTests(unittest.TestCase):
         self.assertIs(event.timestamp.tzinfo, timezone.utc)
         self.assertEqual(event.evidence, (record,))
         self.assertIs(event.evidence[0], record)
+
+    def test_minimal_alert_has_no_invented_details(self) -> None:
+        record = _raw(_MINIMAL_ALERT)
+
+        event = crowdsec_events_from_evidence([record])[0]
+
+        self.assertEqual(event.details, ())
+        self.assertEqual(event.summary, "Minimal CrowdSec alert")
+        self.assertEqual(
+            event.timestamp, datetime(2026, 10, 3, 11, 45, tzinfo=timezone.utc)
+        )
+        self.assertIs(event.evidence[0], record)
+
+    def test_enriched_alert_details_use_fixed_semantic_order(self) -> None:
+        record = _raw(_ENRICHED_ALERT)
+
+        event = crowdsec_events_from_evidence([record])[0]
+
+        self.assertEqual(
+            event.details,
+            (
+                ("alert_id", "42"),
+                ("scenario", "crowdsecurity/ssh-bf"),
+                ("source_scope", "Ip"),
+                ("source_value", "203.0.113.42"),
+                ("country", "US"),
+                ("as_number", "12345"),
+                ("as_name", "Example Network"),
+                ("event_count", "31"),
+                ("machine", "home-soc-crowdsec"),
+                ("start_at", "2026-10-03T11:40:00Z"),
+                ("stop_at", "2026-10-03T11:44:30Z"),
+                ("decision_type", "ban"),
+                ("decision_scope", "Ip"),
+                ("decision_value", "203.0.113.42"),
+                ("decision_duration", "4h"),
+            ),
+        )
+        self.assertEqual(event.summary, "SSH brute force")
+        self.assertIs(event.severity, Severity.MEDIUM)
+        self.assertIs(event.evidence[0], record)
+
+    def test_top_level_source_aliases_and_missing_decisions_are_supported(self) -> None:
+        record = _raw(
+            {
+                "created_at": "2026-10-03T11:45:00Z",
+                "scope": "Ip",
+                "source_ip": "198.51.100.7",
+                "country": "CA",
+                "as_number": "AS64500",
+                "as_name": "Example Transit",
+                "event_count": 9,
+                "machine_name": "sensor-1",
+            }
+        )
+
+        event = crowdsec_events_from_evidence([record])[0]
+
+        self.assertEqual(
+            event.details,
+            (
+                ("source_scope", "Ip"),
+                ("source_value", "198.51.100.7"),
+                ("country", "CA"),
+                ("as_number", "AS64500"),
+                ("as_name", "Example Transit"),
+                ("event_count", "9"),
+                ("machine", "sensor-1"),
+            ),
+        )
+        self.assertFalse(any(key.startswith("decision_") for key, _ in event.details))
+
+    def test_malformed_optional_enrichment_is_ignored(self) -> None:
+        record = _raw(
+            {
+                "created_at": "2026-10-03T11:45:00Z",
+                "id": {"unexpected": "object"},
+                "scenario": ["unexpected"],
+                "source": "not-an-object",
+                "events_count": True,
+                "machine_id": [],
+                "start_at": {},
+                "stop_at": False,
+                "decisions": ["not-an-object", None],
+            }
+        )
+
+        event = crowdsec_events_from_evidence([record])[0]
+
+        self.assertEqual(event.details, ())
+        self.assertIs(event.timestamp_basis, TimestampBasis.SOURCE)
 
     def test_multiple_events_preserve_input_order_and_origin(self) -> None:
         first = _raw(

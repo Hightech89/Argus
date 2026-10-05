@@ -10,6 +10,24 @@ from argus.models import Evidence, SecurityEvent, Severity
 CHECK = "\u2713"
 BULLET = "\u2022"
 
+_DETAIL_LABELS = {
+    "alert_id": "Alert ID",
+    "scenario": "Scenario",
+    "source_scope": "Source Scope",
+    "source_value": "Source",
+    "country": "Country",
+    "as_number": "ASN",
+    "as_name": "AS Name",
+    "event_count": "Events",
+    "machine": "Machine",
+    "start_at": "Start",
+    "stop_at": "Stop",
+    "decision_type": "Decision",
+    "decision_scope": "Decision Scope",
+    "decision_value": "Decision Value",
+    "decision_duration": "Decision Duration",
+}
+
 
 def render_daily_security_brief(brief: DailySecurityBrief) -> str:
     """Render precomputed Daily Security Brief data for an operator."""
@@ -105,12 +123,39 @@ def _render_daily_details(
 
     lines.extend(["", event_title])
     if events:
-        lines.extend(
-            f"{BULLET} {event.timestamp.isoformat()} | {event.severity.value} | {event.summary}"
-            for event in events
-        )
+        for event in events:
+            lines.append(
+                f"{BULLET} {event.timestamp.isoformat()} | "
+                f"{event.severity.value} | {event.summary}"
+            )
+            lines.extend(_render_event_details(event.details))
     else:
         lines.append("None")
+    return lines
+
+
+def _detail_label(key: str) -> str:
+    return _DETAIL_LABELS.get(key, key.replace("_", " ").title())
+
+
+def _render_event_details(details: tuple[tuple[str, str], ...]) -> list[str]:
+    lines: list[str] = []
+    index = 0
+    while index < len(details):
+        key, value = details[index]
+        next_detail = details[index + 1] if index + 1 < len(details) else None
+
+        if key == "source_scope" and next_detail and next_detail[0] == "source_value":
+            lines.append(f"  Source: {value} {next_detail[1]}")
+            index += 2
+            continue
+        if key == "as_number" and next_detail and next_detail[0] == "as_name":
+            lines.append(f"  ASN: {value} {next_detail[1]}")
+            index += 2
+            continue
+
+        lines.append(f"  {_detail_label(key)}: {value}")
+        index += 1
     return lines
 
 

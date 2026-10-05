@@ -39,6 +39,28 @@ class SecurityEventTests(unittest.TestCase):
         self.assertEqual(event.summary, "Repeated SSH login attempts")
         self.assertEqual(event.evidence, (_EVIDENCE,))
         self.assertIs(event.evidence[0], _EVIDENCE)
+        self.assertEqual(event.details, ())
+
+    def test_details_are_immutable_ordered_string_pairs(self) -> None:
+        details = (("scenario", "crowdsecurity/ssh-bf"), ("event_count", "31"))
+
+        event = _event(details=details)
+
+        self.assertEqual(event.details, details)
+        self.assertIs(event.details, details)
+
+    def test_details_require_a_tuple_of_string_pairs(self) -> None:
+        invalid_details = (
+            [("scenario", "ssh-bf")],
+            (("scenario", "ssh-bf", "extra"),),
+            (("scenario", 31),),
+            ((42, "ssh-bf"),),
+        )
+
+        for details in invalid_details:
+            with self.subTest(details=details):
+                with self.assertRaises(TypeError):
+                    _event(details=details)
 
     def test_multiple_evidence_records_remain_associated_in_order(self) -> None:
         second = Evidence("crowdsec.alert.latest_reason", "SSH brute force")
@@ -105,6 +127,8 @@ class SecurityEventTests(unittest.TestCase):
             event.timestamp_basis = TimestampBasis.OBSERVED
         with self.assertRaises(FrozenInstanceError):
             event.evidence[0].content = "Changed"
+        with self.assertRaises(FrozenInstanceError):
+            event.details = (("scenario", "changed"),)
 
     def test_preserves_timezone_aware_timestamp(self) -> None:
         offset = timezone(timedelta(hours=-5))
