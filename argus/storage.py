@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from argus.models import Evidence
+from argus.models import CollectionRun, Evidence
 
 _CREATE_COLLECTION_RUNS_TABLE = """
 CREATE TABLE IF NOT EXISTS collection_runs (
@@ -122,6 +122,20 @@ class EvidenceStore:
                 (collection_id,),
             ).fetchall()
         return tuple(_evidence_from_row(row) for row in rows)
+
+    def list_collections(self) -> tuple[CollectionRun, ...]:
+        """Return collection runs from newest to oldest."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT id, collected_at FROM collection_runs ORDER BY id DESC"
+            ).fetchall()
+        return tuple(
+            CollectionRun(
+                id=collection_id,
+                collected_at=datetime.fromisoformat(collected_at),
+            )
+            for collection_id, collected_at in rows
+        )
 
     def list_evidence(self) -> tuple[Evidence, ...]:
         """Return all persisted Evidence records in insertion order."""

@@ -6,11 +6,21 @@ import unittest
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 
-from argus.models import Evidence, SecurityEvent, Severity, TimestampBasis
+from argus.models import CollectionRun, Evidence, SecurityEvent, Severity, TimestampBasis
 
 
 _TIMESTAMP = datetime(2026, 9, 24, 14, 30, tzinfo=timezone.utc)
 _EVIDENCE = Evidence("crowdsec.alert.latest", "42: ssh-bf", _TIMESTAMP)
+
+
+class CollectionRunTests(unittest.TestCase):
+    def test_collection_run_is_immutable(self) -> None:
+        collection = CollectionRun(id=7, collected_at=_TIMESTAMP)
+
+        self.assertEqual(collection.id, 7)
+        self.assertEqual(collection.collected_at, _TIMESTAMP)
+        with self.assertRaises(FrozenInstanceError):
+            collection.id = 8
 
 
 def _event(**overrides: object) -> SecurityEvent:

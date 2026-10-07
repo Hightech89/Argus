@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from argus.models import Evidence
+from argus.models import CollectionRun, Evidence
 from argus.storage import EvidenceStore, default_database_path
 
 _UTC_TIME = datetime(2026, 10, 5, 14, 30, tzinfo=timezone.utc)
@@ -188,6 +188,30 @@ class EvidenceStoreTests(unittest.TestCase):
         self.assertEqual(self.store.list_collection_evidence(first), (record,))
         self.assertEqual(self.store.list_collection_evidence(second), (record,))
         self.assertEqual(self.store.list_evidence(), (record, record))
+
+    def test_list_collections_returns_newest_first_with_exact_timestamps(self) -> None:
+        self.store.initialize()
+        earlier = _UTC_TIME - timedelta(hours=1)
+        first_id = self.store.add_collection([], collected_at=earlier)
+        second_id = self.store.add_collection([], collected_at=_UTC_TIME)
+
+        collections = self.store.list_collections()
+
+        self.assertEqual(
+            collections,
+            (
+                CollectionRun(second_id, _UTC_TIME),
+                CollectionRun(first_id, earlier),
+            ),
+        )
+        self.assertIsInstance(collections, tuple)
+        with self.assertRaises(TypeError):
+            collections[0] = CollectionRun(99, _UTC_TIME)
+
+    def test_list_collections_returns_empty_tuple_without_runs(self) -> None:
+        self.store.initialize()
+
+        self.assertEqual(self.store.list_collections(), ())
 
     def test_initialize_preserves_collection_associations(self) -> None:
         self.store.initialize()

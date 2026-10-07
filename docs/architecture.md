@@ -91,6 +91,10 @@ Standalone `add()` and `add_many()` records have no collection association.
 Initialization upgrades existing databases in place, preserving their Evidence.
 The stored records are observations, not unique incidents. `argus brief` and
 `argus daily` do not persist their observations.
+`argus history` reads recent `CollectionRun` records and reports their stored
+Evidence counts by source family. It does not interpret observations as
+incidents, deduplicate them, calculate trends, or persist `SecurityEvent`
+records.
 
 Rolling windows use inclusive cutoff and current-time boundaries. Events with
 source timestamps are selected as known occurrences; events using observation

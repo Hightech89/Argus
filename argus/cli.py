@@ -78,6 +78,60 @@ def collect() -> None:
     )
 
 
+@app.command()
+def history(
+    limit: int = typer.Option(10, min=1, help="Maximum collection runs to show."),
+) -> None:
+    """Show recent stored collection snapshots and observation counts."""
+    try:
+        database_path = default_database_path()
+        if not database_path.is_file():
+            typer.echo(_empty_history())
+            return
+        store = EvidenceStore(database_path)
+        collections = store.list_collections()[:limit]
+        sections: list[str] = []
+        for collection in collections:
+            evidence = store.list_collection_evidence(collection.id)
+            docker_count = sum(
+                record.source.startswith("docker.") for record in evidence
+            )
+            crowdsec_count = sum(
+                record.source.startswith("crowdsec.") for record in evidence
+            )
+            other_count = len(evidence) - docker_count - crowdsec_count
+            lines = [
+                f"Collection {collection.id}",
+                f"Time: {collection.collected_at.isoformat()}",
+                f"Evidence: {len(evidence)}",
+                f"Docker records: {docker_count}",
+                f"CrowdSec records: {crowdsec_count}",
+            ]
+            if other_count:
+                lines.append(f"Other records: {other_count}")
+            sections.append("\n".join(lines))
+    except Exception as error:
+        typer.echo(f"ARGUS HISTORY FAILED: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    if not collections:
+        typer.echo(_empty_history())
+        return
+    typer.echo(
+        "ARGUS HISTORY\n\n"
+        "Stored observations grouped by collection run.\n\n"
+        + "\n\n".join(sections)
+    )
+
+
+def _empty_history() -> str:
+    return (
+        "ARGUS HISTORY\n\n"
+        "No collection history found.\n"
+        "Run `argus collect` to save a telemetry snapshot."
+    )
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 

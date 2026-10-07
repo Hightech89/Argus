@@ -14,6 +14,14 @@ class Evidence:
     observed_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class CollectionRun:
+    """An immutable boundary for one stored telemetry snapshot."""
+
+    id: int
+    collected_at: datetime
+
+
 class Severity(StrEnum):
     """Initial severity levels for interpreted security events."""
 

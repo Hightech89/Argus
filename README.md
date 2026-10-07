@@ -17,19 +17,21 @@ security event.
 The architecture is intentionally small and explicit so its behavior is easy to
 understand, test, and audit.
 
-## Version 0.2.0
+## Version 0.3 Development
 
 The current read-only collectors are:
 
 - Docker
 - CrowdSec
 
-Three CLI commands are available:
+Four CLI commands are available:
 
 - `argus brief` reports current Docker and CrowdSec operational status.
 - `argus daily` produces a deterministic rolling 24-hour CrowdSec security
   activity brief.
 - `argus collect` explicitly saves one Docker and CrowdSec telemetry snapshot.
+- `argus history` shows recent stored collection snapshots and observation
+  counts.
 
 The Daily Security Brief pipeline is:
 
@@ -93,6 +95,7 @@ installation path and avoids modifying the system Python installation.
 argus brief
 argus daily
 argus collect
+argus history
 ```
 
 Representative `argus brief` header:
@@ -103,10 +106,14 @@ ARGUS v0.2
 Evidence-driven Security Operations Copilot
 ```
 
-All three commands use local Docker access. `argus brief` shows current
+The collection commands use local Docker access. `argus brief` shows current
 operational status, while `argus daily` shows the current rolling CrowdSec
 security view. Neither command writes to storage. `argus collect` explicitly
 saves one telemetry snapshot without interpreting Evidence as security events.
+`argus history` reads up to 10 recent snapshots by default; use `--limit` to
+choose another positive number. Its counts describe stored observations grouped
+by collection run. They are not unique attacks, incidents, or deduplicated
+security events.
 
 By default, snapshots are stored in:
 

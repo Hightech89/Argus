@@ -366,6 +366,170 @@ class CollectCommandTests(unittest.TestCase):
             self.assertEqual(EvidenceStore(database_path).list_evidence(), ())
 
 
+class HistoryCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+
+    def test_history_command_is_registered(self) -> None:
+        result = self.runner.invoke(app, ["--help"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("history", result.output)
+
+    def test_missing_database_is_an_empty_state_and_is_not_created(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "missing" / "argus.db"
+            with (
+                patch("argus.cli.default_database_path", return_value=database_path) as path,
+                patch("argus.cli.EvidenceStore") as store_type,
+            ):
+                result = self.runner.invoke(app, ["history"])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("ARGUS HISTORY", result.output)
+            self.assertIn("No collection history found.", result.output)
+            self.assertIn("argus collect", result.output)
+            self.assertFalse(database_path.exists())
+            path.assert_called_once_with()
+            store_type.assert_not_called()
+
+    def test_initialized_database_without_collections_is_an_empty_state(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            EvidenceStore(database_path).initialize()
+            with patch("argus.cli.default_database_path", return_value=database_path):
+                result = self.runner.invoke(app, ["history"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("No collection history found.", result.output)
+
+    def test_path_override_shows_one_collection_and_source_counts(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "history.db"
+            store = EvidenceStore(database_path)
+            store.initialize()
+            collection_id = store.add_collection(
+                [
+                    Evidence("docker.first", "1"),
+                    Evidence("docker.second", "2"),
+                    Evidence("crowdsec.first", "3"),
+                    Evidence("manual.note", "4"),
+                ],
+                collected_at=_NOW,
+            )
+            with patch.dict(os.environ, {"ARGUS_DB_PATH": str(database_path)}):
+                result = self.runner.invoke(app, ["history"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn(f"Collection {collection_id}", result.output)
+        self.assertIn(f"Time: {_NOW.isoformat()}", result.output)
+        self.assertIn("Evidence: 4", result.output)
+        self.assertIn("Docker records: 2", result.output)
+        self.assertIn("CrowdSec records: 1", result.output)
+        self.assertIn("Other records: 1", result.output)
+        self.assertIn("Stored observations grouped by collection run.", result.output)
+        self.assertNotIn("attacks", result.output.lower())
+        self.assertNotIn("incidents", result.output.lower())
+
+    def test_multiple_collections_are_shown_newest_first(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            store = EvidenceStore(database_path)
+            store.initialize()
+            first_id = store.add_collection([], collected_at=_NOW - timedelta(hours=1))
+            second_id = store.add_collection([], collected_at=_NOW)
+            with patch("argus.cli.default_database_path", return_value=database_path):
+                result = self.runner.invoke(app, ["history"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertLess(
+            result.output.index(f"Collection {second_id}"),
+            result.output.index(f"Collection {first_id}"),
+        )
+
+    def test_default_limit_shows_ten_most_recent_collections(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            self._add_collections(database_path, 12)
+            with patch("argus.cli.default_database_path", return_value=database_path):
+                result = self.runner.invoke(app, ["history"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(result.output.count("\nCollection "), 10)
+        self.assertIn("Collection 12", result.output)
+        self.assertIn("Collection 3", result.output)
+        self.assertNotIn("\nCollection 2\n", result.output)
+
+    def test_custom_limit_is_applied(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            self._add_collections(database_path, 5)
+            with patch("argus.cli.default_database_path", return_value=database_path):
+                result = self.runner.invoke(app, ["history", "--limit", "2"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(result.output.count("\nCollection "), 2)
+        self.assertIn("Collection 5", result.output)
+        self.assertIn("Collection 4", result.output)
+        self.assertNotIn("\nCollection 3\n", result.output)
+
+    def test_nonpositive_limit_is_rejected_before_storage_access(self) -> None:
+        with patch("argus.cli.default_database_path") as path:
+            result = self.runner.invoke(app, ["history", "--limit", "0"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Invalid value", result.output)
+        self.assertNotIn("ARGUS HISTORY\n", result.output)
+        path.assert_not_called()
+
+    def test_storage_failure_exits_nonzero_without_traceback_or_history(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            database_path.touch()
+            store = MagicMock()
+            store.list_collections.side_effect = OSError("cannot read database")
+            with (
+                patch("argus.cli.default_database_path", return_value=database_path),
+                patch("argus.cli.EvidenceStore", return_value=store),
+            ):
+                result = self.runner.invoke(app, ["history"])
+
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn("ARGUS HISTORY FAILED: cannot read database", result.stderr)
+        self.assertNotIn("ARGUS HISTORY\n", result.output)
+        self.assertNotIn("Traceback", result.output)
+        store.initialize.assert_not_called()
+
+    def test_history_does_not_modify_database(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            store = EvidenceStore(database_path)
+            store.initialize()
+            run_id = store.add_collection(
+                [Evidence("docker.record", "stored", _NOW)], collected_at=_NOW
+            )
+            before = database_path.read_bytes()
+            with patch("argus.cli.default_database_path", return_value=database_path):
+                result = self.runner.invoke(app, ["history"])
+            after = database_path.read_bytes()
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(after, before)
+            self.assertEqual(
+                store.list_collection_evidence(run_id),
+                (Evidence("docker.record", "stored", _NOW),),
+            )
+
+    @staticmethod
+    def _add_collections(database_path: Path, count: int) -> None:
+        store = EvidenceStore(database_path)
+        store.initialize()
+        for index in range(count):
+            store.add_collection(
+                [], collected_at=_NOW + timedelta(minutes=index)
+            )
+
+
 class BriefCommandRegressionTests(unittest.TestCase):
     def test_brief_pipeline_is_unchanged(self) -> None:
         docker_evidence = [Evidence("docker.installed", "true")]
