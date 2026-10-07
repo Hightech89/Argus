@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
 from argus.cli import _utc_now, app
 from argus.models import Evidence
+from argus.storage import EvidenceStore
 
 _NOW = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
 
@@ -175,6 +179,192 @@ class DailyCommandTests(unittest.TestCase):
         self.assertEqual(result.output, "rendered daily brief\n")
         renderer.assert_called_once()
 
+    def test_daily_remains_read_only(self) -> None:
+        with (
+            patch("argus.cli.EvidenceStore") as store,
+            patch("argus.cli._utc_now", return_value=_NOW),
+            patch("argus.cli.collect_crowdsec_evidence", return_value=[]),
+        ):
+            result = self.runner.invoke(app, ["daily"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        store.assert_not_called()
+
+
+class CollectCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+
+    def test_collect_command_is_registered(self) -> None:
+        result = self.runner.invoke(app, ["--help"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("collect", result.output)
+
+    def test_collect_uses_default_path_and_one_ordered_snapshot_call(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "data" / "argus.db"
+            docker = [Evidence("docker.first", "1"), Evidence("docker.second", "2")]
+            crowdsec = [Evidence("crowdsec.first", "3")]
+            store = MagicMock()
+            store.add_collection.return_value = 12
+            call_order: list[str] = []
+            store.initialize.side_effect = lambda: call_order.append("initialize")
+
+            def clock() -> datetime:
+                call_order.append("clock")
+                return _NOW
+
+            def collect_docker() -> list[Evidence]:
+                call_order.append("docker")
+                return docker
+
+            def collect_crowdsec() -> list[Evidence]:
+                call_order.append("crowdsec")
+                return crowdsec
+
+            with (
+                patch("argus.cli.default_database_path", return_value=database_path) as path,
+                patch("argus.cli.EvidenceStore", return_value=store) as store_type,
+                patch("argus.cli._utc_now", side_effect=clock) as clock_mock,
+                patch("argus.cli.collect_docker_evidence", side_effect=collect_docker) as docker_collector,
+                patch("argus.cli.collect_crowdsec_evidence", side_effect=collect_crowdsec) as crowdsec_collector,
+            ):
+                result = self.runner.invoke(app, ["collect"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        path.assert_called_once_with()
+        store_type.assert_called_once_with(database_path)
+        store.initialize.assert_called_once_with()
+        clock_mock.assert_called_once_with()
+        docker_collector.assert_called_once_with()
+        crowdsec_collector.assert_called_once_with()
+        self.assertEqual(call_order, ["initialize", "clock", "docker", "crowdsec"])
+        store.add_collection.assert_called_once_with(
+            [*docker, *crowdsec], collected_at=_NOW
+        )
+        self.assertIn("ARGUS COLLECTION COMPLETE", result.output)
+        self.assertIn("Collection: 12", result.output)
+        self.assertIn("Evidence stored: 3", result.output)
+        self.assertIn("Docker records: 2", result.output)
+        self.assertIn("CrowdSec records: 1", result.output)
+        self.assertIn(f"Database: {database_path}", result.output)
+
+    def test_argus_db_path_creates_parent_and_persists_readable_evidence(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "nested" / "argus.db"
+            docker = [Evidence("docker.record", "docker", _NOW)]
+            crowdsec = [Evidence("crowdsec.record", "crowdsec", _NOW)]
+            with (
+                patch.dict(os.environ, {"ARGUS_DB_PATH": str(database_path)}),
+                patch("argus.cli._utc_now", return_value=_NOW),
+                patch("argus.cli.collect_docker_evidence", return_value=docker),
+                patch("argus.cli.collect_crowdsec_evidence", return_value=crowdsec),
+            ):
+                result = self.runner.invoke(app, ["collect"])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertTrue(database_path.parent.is_dir())
+            self.assertTrue(database_path.is_file())
+            self.assertIn(f"Database: {database_path}", result.output)
+            store = EvidenceStore(database_path)
+            self.assertEqual(store.list_collection_evidence(1), (*docker, *crowdsec))
+
+    def test_collector_error_evidence_is_persisted(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            docker_error = Evidence("docker.error", "Docker CLI not found.", _NOW)
+            crowdsec_error = Evidence("crowdsec.error", "Docker unavailable.", _NOW)
+            with (
+                patch("argus.cli.default_database_path", return_value=database_path),
+                patch("argus.cli._utc_now", return_value=_NOW),
+                patch("argus.cli.collect_docker_evidence", return_value=[docker_error]),
+                patch("argus.cli.collect_crowdsec_evidence", return_value=[crowdsec_error]),
+            ):
+                result = self.runner.invoke(app, ["collect"])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(
+                EvidenceStore(database_path).list_collection_evidence(1),
+                (docker_error, crowdsec_error),
+            )
+
+    def test_storage_failure_exits_nonzero_without_success_output(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            store = MagicMock()
+            store.add_collection.side_effect = OSError("database is read-only")
+            with (
+                patch(
+                    "argus.cli.default_database_path",
+                    return_value=Path(temporary_directory) / "argus.db",
+                ),
+                patch("argus.cli.EvidenceStore", return_value=store),
+                patch("argus.cli.collect_docker_evidence", return_value=[]),
+                patch("argus.cli.collect_crowdsec_evidence", return_value=[]),
+            ):
+                result = self.runner.invoke(app, ["collect"])
+
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn("ARGUS COLLECTION FAILED: database is read-only", result.stderr)
+        self.assertNotIn("ARGUS COLLECTION COMPLETE", result.output)
+
+    def test_initialization_failure_exits_before_collection(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            store = MagicMock()
+            store.initialize.side_effect = OSError("cannot initialize database")
+            with (
+                patch(
+                    "argus.cli.default_database_path",
+                    return_value=Path(temporary_directory) / "argus.db",
+                ),
+                patch("argus.cli.EvidenceStore", return_value=store),
+                patch("argus.cli._utc_now") as clock,
+                patch("argus.cli.collect_docker_evidence") as docker_collector,
+            ):
+                result = self.runner.invoke(app, ["collect"])
+
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn("ARGUS COLLECTION FAILED: cannot initialize database", result.stderr)
+        self.assertNotIn("ARGUS COLLECTION COMPLETE", result.output)
+        clock.assert_not_called()
+        docker_collector.assert_not_called()
+
+    def test_directory_creation_failure_exits_nonzero(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            with (
+                patch(
+                    "argus.cli.default_database_path",
+                    return_value=Path(temporary_directory) / "nested" / "argus.db",
+                ),
+                patch("pathlib.Path.mkdir", side_effect=OSError("permission denied")),
+                patch("argus.cli.collect_docker_evidence") as docker_collector,
+            ):
+                result = self.runner.invoke(app, ["collect"])
+
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn("ARGUS COLLECTION FAILED: permission denied", result.stderr)
+        self.assertNotIn("ARGUS COLLECTION COMPLETE", result.output)
+        docker_collector.assert_not_called()
+
+    def test_unexpected_collector_failure_exits_nonzero_without_success(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            with (
+                patch("argus.cli.default_database_path", return_value=database_path),
+                patch(
+                    "argus.cli.collect_docker_evidence",
+                    side_effect=RuntimeError("collector crashed"),
+                ),
+                patch("argus.cli.collect_crowdsec_evidence") as crowdsec_collector,
+            ):
+                result = self.runner.invoke(app, ["collect"])
+
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertIn("ARGUS COLLECTION FAILED: collector crashed", result.stderr)
+            self.assertNotIn("ARGUS COLLECTION COMPLETE", result.output)
+            crowdsec_collector.assert_not_called()
+            self.assertEqual(EvidenceStore(database_path).list_evidence(), ())
+
 
 class BriefCommandRegressionTests(unittest.TestCase):
     def test_brief_pipeline_is_unchanged(self) -> None:
@@ -201,6 +391,17 @@ class BriefCommandRegressionTests(unittest.TestCase):
             docker_evidence,
             version="0.2.0",
         )
+
+    def test_brief_remains_read_only(self) -> None:
+        with (
+            patch("argus.cli.EvidenceStore") as store,
+            patch("argus.cli.collect_docker_evidence", return_value=[]),
+            patch("argus.cli.collect_crowdsec_evidence", return_value=[]),
+        ):
+            result = CliRunner().invoke(app, ["brief"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        store.assert_not_called()
 
     def test_brief_uses_release_version_in_runtime_output(self) -> None:
         with (

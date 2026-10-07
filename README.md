@@ -4,8 +4,9 @@ Argus is an evidence-driven Security Operations (SOC) copilot for Home SOC
 environments. It collects read-only evidence from security tools and presents
 deterministic, traceable operational summaries for a human operator.
 
-Argus does not make autonomous changes. Version 0.2.0 has no AI, persistence,
-database, background monitoring, correlation, or automated response features.
+Argus does not make autonomous changes. Version 0.3 development adds explicit
+local snapshot persistence, but has no AI, background monitoring, correlation,
+or automated response features.
 
 ## Philosophy
 
@@ -23,11 +24,12 @@ The current read-only collectors are:
 - Docker
 - CrowdSec
 
-Two CLI commands are available:
+Three CLI commands are available:
 
 - `argus brief` reports current Docker and CrowdSec operational status.
 - `argus daily` produces a deterministic rolling 24-hour CrowdSec security
   activity brief.
+- `argus collect` explicitly saves one Docker and CrowdSec telemetry snapshot.
 
 The Daily Security Brief pipeline is:
 
@@ -90,6 +92,7 @@ installation path and avoids modifying the system Python installation.
 ```bash
 argus brief
 argus daily
+argus collect
 ```
 
 Representative `argus brief` header:
@@ -100,9 +103,32 @@ ARGUS v0.2
 Evidence-driven Security Operations Copilot
 ```
 
-Both commands use local Docker access. `argus daily` reads CrowdSec telemetry
-through the existing CrowdSec container and does not require a separate API
-integration.
+All three commands use local Docker access. `argus brief` shows current
+operational status, while `argus daily` shows the current rolling CrowdSec
+security view. Neither command writes to storage. `argus collect` explicitly
+saves one telemetry snapshot without interpreting Evidence as security events.
+
+By default, snapshots are stored in:
+
+```text
+~/.argus/argus.db
+```
+
+Set `ARGUS_DB_PATH` to use another SQLite database file:
+
+```bash
+ARGUS_DB_PATH=/path/to/argus.db argus collect
+```
+
+On PowerShell:
+
+```powershell
+$env:ARGUS_DB_PATH = "C:\path\to\argus.db"
+argus collect
+```
+
+`argus daily` reads CrowdSec telemetry through the existing CrowdSec container
+and does not require a separate API integration.
 
 ## Testing
 

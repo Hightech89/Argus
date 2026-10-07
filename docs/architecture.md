@@ -70,18 +70,17 @@ Version 0.3 introduces optional local Evidence persistence through
 `argus.storage.EvidenceStore`:
 
 ```text
-collector -> Evidence -> optional EvidenceStore
-
-CollectionRun
-    └── Evidence observations
+Docker ───┐
+          ├──> Evidence ──> CollectionRun/EvidenceStore
+CrowdSec ─┘
 ```
 
 The store uses a caller-supplied SQLite file and deterministic insertion IDs.
-CLI commands do not use it automatically yet, `SecurityEvent` records are not
+`argus collect` explicitly stores one Docker and CrowdSec snapshot. `argus
+brief` and `argus daily` remain read-only, `SecurityEvent` records are not
 persisted, and duplicate Evidence rows are intentionally allowed because no
 deduplication policy exists yet. `default_database_path()` resolves a nonblank
-`ARGUS_DB_PATH` override or defaults to `~/.argus/argus.db`; it returns a
-`pathlib.Path` without creating directories or a database file.
+`ARGUS_DB_PATH` override or defaults to `~/.argus/argus.db`.
 
 Collection runs are snapshot boundaries, not incidents, unique alerts, or
 deduplicated events. `add_collection()` stores one run with its timezone-aware
@@ -90,8 +89,8 @@ collection time and all Evidence observations in a single transaction;
 Evidence across runs remains valid; deduplication does not exist yet.
 Standalone `add()` and `add_many()` records have no collection association.
 Initialization upgrades existing databases in place, preserving their Evidence.
-CLI collection (`argus collect`) is not implemented yet; `argus brief` and
-`argus daily` remain read-only and do not persist their observations.
+The stored records are observations, not unique incidents. `argus brief` and
+`argus daily` do not persist their observations.
 
 Rolling windows use inclusive cutoff and current-time boundaries. Events with
 source timestamps are selected as known occurrences; events using observation
