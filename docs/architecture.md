@@ -66,6 +66,20 @@ The Daily Security Brief renderer reads only `SecurityEvent.details` when it
 shows indented context beneath an event. It does not parse supporting Evidence,
 alter summaries, or change aggregation counts.
 
+Version 0.3 introduces optional local Evidence persistence through
+`argus.storage.EvidenceStore`:
+
+```text
+collector -> Evidence -> optional EvidenceStore
+```
+
+The store uses a caller-supplied SQLite file and deterministic insertion IDs.
+CLI commands do not use it automatically yet, `SecurityEvent` records are not
+persisted, and duplicate Evidence rows are intentionally allowed because no
+deduplication policy exists yet. `default_database_path()` resolves a nonblank
+`ARGUS_DB_PATH` override or defaults to `~/.argus/argus.db`; it returns a
+`pathlib.Path` without creating directories or a database file.
+
 Rolling windows use inclusive cutoff and current-time boundaries. Events with
 source timestamps are selected as known occurrences; events using observation
 time are selected separately because their actual occurrence time is unknown.
