@@ -115,6 +115,7 @@ class EvidenceStoreTests(unittest.TestCase):
                 ("source", "TEXT", 1, 0),
                 ("content", "TEXT", 1, 0),
                 ("observed_at", "TEXT", 0, 0),
+                ("collection_id", "INTEGER", 0, 0),
             ],
         )
 
@@ -123,6 +124,169 @@ class EvidenceStoreTests(unittest.TestCase):
             self.store.list_evidence()
 
         self.assertFalse(self.path.exists())
+
+    def test_collection_runs_schema(self) -> None:
+        self.store.initialize()
+        with closing(sqlite3.connect(self.path)) as connection:
+            columns = connection.execute("PRAGMA table_info(collection_runs)").fetchall()
+            foreign_keys = connection.execute("PRAGMA foreign_key_list(evidence)").fetchall()
+        self.assertEqual(
+            [(column[1], column[2], column[3], column[5]) for column in columns],
+            [("id", "INTEGER", 0, 1), ("collected_at", "TEXT", 1, 0)],
+        )
+        self.assertEqual(len(foreign_keys), 1)
+        self.assertEqual(foreign_keys[0][2:5], ("collection_runs", "collection_id", "id"))
+
+    def test_legacy_schema_upgrade_preserves_evidence_and_ids(self) -> None:
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                "CREATE TABLE evidence (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "source TEXT NOT NULL, content TEXT NOT NULL, observed_at TEXT NULL)"
+            )
+            connection.executemany(
+                "INSERT INTO evidence VALUES (?, ?, ?, ?)",
+                [(7, "old", "exact content", _UTC_TIME.isoformat()),
+                 (9, "manual", "no time", None)],
+            )
+        self.store.initialize()
+        self.store.initialize()
+        self.assertEqual(self.store.list_evidence(), (
+            Evidence("old", "exact content", _UTC_TIME),
+            Evidence("manual", "no time"),
+        ))
+        with self.store._connection() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT id, collection_id FROM evidence ORDER BY id"
+            ).fetchall(), [(7, None), (9, None)])
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute("UPDATE evidence SET collection_id = 999 WHERE id = 7")
+        run_id = self.store.add_collection([Evidence("new", "snapshot")], collected_at=_UTC_TIME)
+        self.assertEqual(self.store.list_collection_evidence(run_id), (Evidence("new", "snapshot"),))
+        self.assertEqual(self.store.add(Evidence("next", "standalone")), 11)
+
+    def test_add_collection_creates_one_run_and_associates_all_rows(self) -> None:
+        self.store.initialize()
+        records = (Evidence("z", "first", _UTC_TIME), Evidence("a", "second"),
+                   Evidence("z", "third", _UTC_TIME))
+        run_id = self.store.add_collection(iter(records), collected_at=_UTC_TIME)
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT id, collected_at FROM collection_runs"
+            ).fetchall(), [(run_id, _UTC_TIME.isoformat())])
+            self.assertEqual(connection.execute(
+                "SELECT collection_id FROM evidence ORDER BY id"
+            ).fetchall(), [(run_id,)] * 3)
+        self.assertEqual(self.store.list_collection_evidence(run_id), records)
+        self.assertEqual(self.store.list_evidence(), records)
+
+    def test_multiple_runs_keep_duplicate_evidence_distinct(self) -> None:
+        self.store.initialize()
+        record = Evidence("source", "same observation", _UTC_TIME)
+        first = self.store.add_collection([record], collected_at=_UTC_TIME)
+        second = self.store.add_collection([record], collected_at=_UTC_TIME)
+        self.assertNotEqual(first, second)
+        self.assertEqual(self.store.list_collection_evidence(first), (record,))
+        self.assertEqual(self.store.list_collection_evidence(second), (record,))
+        self.assertEqual(self.store.list_evidence(), (record, record))
+
+    def test_initialize_preserves_collection_associations(self) -> None:
+        self.store.initialize()
+        record = Evidence("source", "content")
+        run_id = self.store.add_collection([record], collected_at=_UTC_TIME)
+        self.store.initialize()
+        self.store.initialize()
+        self.assertEqual(self.store.list_collection_evidence(run_id), (record,))
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT id, collected_at FROM collection_runs"
+            ).fetchall(), [(run_id, _UTC_TIME.isoformat())])
+
+    def test_empty_collection_creates_a_run(self) -> None:
+        self.store.initialize()
+        run_id = self.store.add_collection([], collected_at=_UTC_TIME)
+        self.assertEqual(self.store.list_collection_evidence(run_id), ())
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT id FROM collection_runs"
+            ).fetchall(), [(run_id,)])
+
+    def test_unknown_collection_returns_empty_tuple(self) -> None:
+        self.store.initialize()
+        self.assertEqual(self.store.list_collection_evidence(999), ())
+
+    def test_collection_time_accepts_non_utc_offset(self) -> None:
+        self.store.initialize()
+        collected_at = _UTC_TIME.astimezone(timezone(timedelta(hours=-5)))
+        run_id = self.store.add_collection([], collected_at=collected_at)
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT collected_at FROM collection_runs WHERE id = ?", (run_id,)
+            ).fetchone(), (collected_at.isoformat(),))
+
+    def test_collection_rejects_naive_time_before_consuming_evidence(self) -> None:
+        self.store.initialize()
+        def unexpected_iteration() -> Iterator[Evidence]:
+            self.fail("Evidence must not be consumed for an invalid collection time")
+            yield Evidence("unused", "unused")
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            self.store.add_collection(unexpected_iteration(), collected_at=datetime(2026, 10, 5))
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("SELECT * FROM collection_runs").fetchall(), [])
+
+    def test_collection_rejects_non_datetime_time(self) -> None:
+        self.store.initialize()
+        with self.assertRaisesRegex(TypeError, "must be a datetime"):
+            self.store.add_collection([], collected_at="2026-10-05")  # type: ignore[arg-type]
+
+    def test_collection_insert_failure_rolls_back_run_and_evidence(self) -> None:
+        self.store.initialize()
+        existing = Evidence("existing", "keep")
+        existing_id = self.store.add_collection([existing], collected_at=_UTC_TIME)
+        invalid = Evidence(None, "violates NOT NULL")  # type: ignore[arg-type]
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.add_collection([Evidence("valid", "rollback"), invalid], collected_at=_UTC_TIME)
+        self.assertEqual(self.store.list_evidence(), (existing,))
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("SELECT id FROM collection_runs").fetchall(), [(existing_id,)])
+
+    def test_collection_iterator_failure_rolls_back_run_and_evidence(self) -> None:
+        self.store.initialize()
+        def failing_snapshot() -> Iterator[Evidence]:
+            yield Evidence("first", "rollback")
+            # An independent connection cannot see either uncommitted insertion.
+            with closing(sqlite3.connect(self.path)) as connection:
+                self.assertEqual(connection.execute("SELECT * FROM collection_runs").fetchall(), [])
+                self.assertEqual(connection.execute("SELECT * FROM evidence").fetchall(), [])
+            raise RuntimeError("snapshot failed")
+        with self.assertRaisesRegex(RuntimeError, "snapshot failed"):
+            self.store.add_collection(failing_snapshot(), collected_at=_UTC_TIME)
+        self.assertEqual(self.store.list_evidence(), ())
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("SELECT * FROM collection_runs").fetchall(), [])
+
+    def test_foreign_keys_enforced_on_each_store_connection(self) -> None:
+        self.store.initialize()
+        run_id = self.store.add_collection([Evidence("source", "content")], collected_at=_UTC_TIME)
+        for _ in range(2):
+            with self.store._connection() as connection, connection:
+                self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone(), (1,))
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        "INSERT INTO evidence (source, content, collection_id) VALUES ('bad', 'bad', ?)",
+                        (run_id + 1,),
+                    )
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute("DELETE FROM collection_runs WHERE id = ?", (run_id,))
+
+    def test_standalone_inserts_have_no_collection(self) -> None:
+        self.store.initialize()
+        record = Evidence("source", "standalone")
+        self.assertEqual(self.store.add(record), 1)
+        self.assertEqual(self.store.add_many([record, record]), (2, 3))
+        self.assertEqual(self.store.list_evidence(), (record,) * 3)
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("SELECT collection_id FROM evidence").fetchall(), [(None,)] * 3)
+            self.assertEqual(connection.execute("SELECT * FROM collection_runs").fetchall(), [])
 
     def test_initialize_is_idempotent_and_preserves_records(self) -> None:
         self.store.initialize()

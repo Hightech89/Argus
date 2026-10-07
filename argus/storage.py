@@ -11,12 +11,20 @@ from pathlib import Path
 
 from argus.models import Evidence
 
+_CREATE_COLLECTION_RUNS_TABLE = """
+CREATE TABLE IF NOT EXISTS collection_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collected_at TEXT NOT NULL
+)
+"""
+
 _CREATE_EVIDENCE_TABLE = """
 CREATE TABLE IF NOT EXISTS evidence (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
     content TEXT NOT NULL,
-    observed_at TEXT NULL
+    observed_at TEXT NULL,
+    collection_id INTEGER NULL REFERENCES collection_runs(id)
 )
 """
 
@@ -47,9 +55,17 @@ class EvidenceStore:
         self.path = Path(path)
 
     def initialize(self) -> None:
-        """Create the database schema without altering existing records."""
+        """Create or upgrade the schema without altering existing records."""
         with self._connection(create=True) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(_CREATE_COLLECTION_RUNS_TABLE)
             connection.execute(_CREATE_EVIDENCE_TABLE)
+            columns = connection.execute("PRAGMA table_info(evidence)").fetchall()
+            if not any(column[1] == "collection_id" for column in columns):
+                connection.execute(
+                    "ALTER TABLE evidence ADD COLUMN collection_id INTEGER NULL "
+                    "REFERENCES collection_runs(id)"
+                )
 
     def add(self, evidence: Evidence) -> int:
         """Persist one Evidence record and return its insertion ID."""
@@ -73,22 +89,45 @@ class EvidenceStore:
                 inserted_ids.append(cursor.lastrowid)
         return tuple(inserted_ids)
 
+    def add_collection(
+        self, evidence: Iterable[Evidence], *, collected_at: datetime
+    ) -> int:
+        """Persist a snapshot (including an empty one) in one transaction."""
+        if not isinstance(collected_at, datetime):
+            raise TypeError("collected_at must be a datetime")
+        if collected_at.tzinfo is None or collected_at.utcoffset() is None:
+            raise ValueError("collected_at must be timezone-aware")
+        with self._connection() as connection, connection:
+            cursor = connection.execute(
+                "INSERT INTO collection_runs (collected_at) VALUES (?)",
+                (collected_at.isoformat(),),
+            )
+            collection_id = cursor.lastrowid
+            if collection_id is None:
+                raise RuntimeError("SQLite did not return a collection run ID")
+            for record in evidence:
+                connection.execute(
+                    "INSERT INTO evidence "
+                    "(source, content, observed_at, collection_id) VALUES (?, ?, ?, ?)",
+                    (*_evidence_values(record), collection_id),
+                )
+        return collection_id
+
+    def list_collection_evidence(self, collection_id: int) -> tuple[Evidence, ...]:
+        """Return a snapshot's observations in insertion order, or an empty tuple."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT source, content, observed_at FROM evidence "
+                "WHERE collection_id = ? ORDER BY id",
+                (collection_id,),
+            ).fetchall()
+        return tuple(_evidence_from_row(row) for row in rows)
+
     def list_evidence(self) -> tuple[Evidence, ...]:
         """Return all persisted Evidence records in insertion order."""
         with self._connection() as connection:
             rows = connection.execute(_SELECT_EVIDENCE).fetchall()
-        return tuple(
-            Evidence(
-                source=source,
-                content=content,
-                observed_at=(
-                    datetime.fromisoformat(observed_at)
-                    if observed_at is not None
-                    else None
-                ),
-            )
-            for source, content, observed_at in rows
-        )
+        return tuple(_evidence_from_row(row) for row in rows)
 
     @contextmanager
     def _connection(self, *, create: bool = False) -> Iterator[sqlite3.Connection]:
@@ -96,9 +135,19 @@ class EvidenceStore:
             raise RuntimeError("EvidenceStore must be initialized before use")
         connection = sqlite3.connect(self.path)
         try:
+            connection.execute("PRAGMA foreign_keys = ON")
             yield connection
         finally:
             connection.close()
+
+
+def _evidence_from_row(row: tuple[str, str, str | None]) -> Evidence:
+    source, content, observed_at = row
+    return Evidence(
+        source=source,
+        content=content,
+        observed_at=datetime.fromisoformat(observed_at) if observed_at is not None else None,
+    )
 
 
 def _evidence_values(evidence: Evidence) -> tuple[object, object, str | None]:

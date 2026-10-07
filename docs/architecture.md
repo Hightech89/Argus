@@ -71,6 +71,9 @@ Version 0.3 introduces optional local Evidence persistence through
 
 ```text
 collector -> Evidence -> optional EvidenceStore
+
+CollectionRun
+    └── Evidence observations
 ```
 
 The store uses a caller-supplied SQLite file and deterministic insertion IDs.
@@ -79,6 +82,16 @@ persisted, and duplicate Evidence rows are intentionally allowed because no
 deduplication policy exists yet. `default_database_path()` resolves a nonblank
 `ARGUS_DB_PATH` override or defaults to `~/.argus/argus.db`; it returns a
 `pathlib.Path` without creating directories or a database file.
+
+Collection runs are snapshot boundaries, not incidents, unique alerts, or
+deduplicated events. `add_collection()` stores one run with its timezone-aware
+collection time and all Evidence observations in a single transaction;
+`list_collection_evidence()` retrieves them in insertion order. Duplicate
+Evidence across runs remains valid; deduplication does not exist yet.
+Standalone `add()` and `add_many()` records have no collection association.
+Initialization upgrades existing databases in place, preserving their Evidence.
+CLI collection (`argus collect`) is not implemented yet; `argus brief` and
+`argus daily` remain read-only and do not persist their observations.
 
 Rolling windows use inclusive cutoff and current-time boundaries. Events with
 source timestamps are selected as known occurrences; events using observation
