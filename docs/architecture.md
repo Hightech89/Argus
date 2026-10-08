@@ -127,11 +127,16 @@ records.
 and Linux auth Evidence, applies an optional source filter, and passes the
 resulting events to `deduplicate_events()`. It attributes a retained event to
 the earliest stored collection containing that identity, which may not be its
-first real occurrence. Events without identity remain separate. It then sorts
-retained events by event timestamp, newest first, with input order preserved for
-ties, and applies the display limit. `OBSERVED` timestamps are labelled as
-observation times with unknown occurrence time. The command reads stored
-Evidence only; no event rows or schema changes are involved.
+first real occurrence. Events without identity remain separate. A pure selector
+then keeps events whose own timestamps fall within the inclusive UTC window:
+24 hours by default, a positive `--hours` lookback, or all history with `--all`.
+Collection time is attribution metadata, never the event-time filter. `SOURCE`
+timestamps represent occurrence; `OBSERVED` timestamps represent observation
+only, with actual occurrence unknown. Retained events sort newest first with
+input order preserved for ties, then the display limit (100 by default) applies.
+The report shows window bounds, matching count before the limit, and displayed
+count. The command reads stored Evidence only; no event rows or schema changes
+are involved.
 
 Rolling windows use inclusive cutoff and current-time boundaries. Events with
 source timestamps are selected as known occurrences; events using observation

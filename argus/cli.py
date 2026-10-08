@@ -10,6 +10,7 @@ from argus.analysis import (
     build_daily_security_brief,
     deduplicate_events,
     select_event_window,
+    select_historical_event_window,
 )
 from argus.collectors import (
     collect_crowdsec_evidence,
@@ -154,40 +155,59 @@ def history(
 
 @app.command()
 def investigate(
-    limit: int = typer.Option(20, min=1, help="Maximum events to show."),
+    limit: int = typer.Option(100, min=1, help="Maximum events to show."),
     source: InvestigationSource = typer.Option(
         InvestigationSource.ALL, help="Security event source."
     ),
+    hours: int | None = typer.Option(
+        None, min=1, help="Look back this many hours (default: 24)."
+    ),
+    all_history: bool = typer.Option(
+        False, "--all", help="Search all stored history."
+    ),
 ) -> None:
-    """Reconstruct recent security events from stored Evidence."""
-    try:
-        database_path = default_database_path()
-        if not database_path.is_file():
-            typer.echo(_empty_investigation())
-            return
+    """Reconstruct security events from stored Evidence within a time window."""
+    if hours is not None and all_history:
+        raise typer.BadParameter(
+            "--hours cannot be combined with --all", param_hint="--hours"
+        )
 
-        store = EvidenceStore(database_path)
+    try:
+        now = _utc_now()
+        lookback = timedelta(hours=hours if hours is not None else 24)
+        window_start = None if all_history else now - lookback
+        database_path = default_database_path()
         candidates: list[tuple[SecurityEvent, int]] = []
-        for collection in reversed(store.list_collections()):
-            evidence = store.list_collection_evidence(collection.id)
-            if source in (InvestigationSource.ALL, InvestigationSource.CROWDSEC):
-                candidates.extend(
-                    (event, collection.id)
-                    for event in crowdsec_events_from_evidence(evidence)
-                )
-            if source in (InvestigationSource.ALL, InvestigationSource.LINUX_AUTH):
-                candidates.extend(
-                    (event, collection.id)
-                    for event in linux_auth_events_from_evidence(evidence)
-                )
+        if database_path.is_file():
+            store = EvidenceStore(database_path)
+            for collection in reversed(store.list_collections()):
+                evidence = store.list_collection_evidence(collection.id)
+                if source in (InvestigationSource.ALL, InvestigationSource.CROWDSEC):
+                    candidates.extend(
+                        (event, collection.id)
+                        for event in crowdsec_events_from_evidence(evidence)
+                    )
+                if source in (InvestigationSource.ALL, InvestigationSource.LINUX_AUTH):
+                    candidates.extend(
+                        (event, collection.id)
+                        for event in linux_auth_events_from_evidence(evidence)
+                    )
 
         retained = deduplicate_events(event for event, _ in candidates)
         # Equal-valued observations still have distinct event objects and provenance.
         collection_by_event = {
             id(event): collection_id for event, collection_id in candidates
         }
+        attributed = tuple((event, collection_by_event[id(event)]) for event in retained)
+        matching = (
+            attributed
+            if all_history
+            else select_historical_event_window(
+                attributed, now=now, window=lookback
+            )
+        )
         displayed = sorted(
-            ((event, collection_by_event[id(event)]) for event in retained),
+            matching,
             key=lambda item: item[0].timestamp,
             reverse=True,
         )[:limit]
@@ -195,14 +215,13 @@ def investigate(
         typer.echo(f"ARGUS INVESTIGATION FAILED: {error}", err=True)
         raise typer.Exit(code=1) from error
 
-    typer.echo(render_investigation(displayed) if displayed else _empty_investigation())
-
-
-def _empty_investigation() -> str:
-    return (
-        "ARGUS INVESTIGATION\n\n"
-        "No stored security events found.\n"
-        "Run `argus collect` to save a telemetry snapshot."
+    typer.echo(
+        render_investigation(
+            displayed,
+            window_start=window_start,
+            window_end=now,
+            matching_total=len(matching),
+        )
     )
 
 

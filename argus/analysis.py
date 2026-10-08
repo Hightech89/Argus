@@ -22,6 +22,26 @@ def deduplicate_events(events: Iterable[SecurityEvent]) -> tuple[SecurityEvent, 
     return tuple(retained)
 
 
+def select_historical_event_window(
+    events: Iterable[tuple[SecurityEvent, int]],
+    *,
+    now: datetime,
+    window: timedelta,
+) -> tuple[tuple[SecurityEvent, int], ...]:
+    """Select attributed events by their own timestamp within inclusive bounds."""
+    _validate_aware_datetime(now, "now")
+    if not isinstance(window, timedelta):
+        raise TypeError("window must be a timedelta")
+    if window <= timedelta(0):
+        raise ValueError("window must be positive")
+    cutoff = now - window
+    return tuple(
+        (event, collection_id)
+        for event, collection_id in events
+        if cutoff <= event.timestamp <= now
+    )
+
+
 @dataclass(frozen=True)
 class EventWindow:
     """Events selected by occurrence time and observation time."""

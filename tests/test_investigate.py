@@ -66,6 +66,7 @@ class InvestigationCommandTests(unittest.TestCase):
     def _invoke(self, *arguments: str):
         with (
             patch("argus.cli.default_database_path", return_value=self.path),
+            patch("argus.cli._utc_now", return_value=_NOW) as clock,
             patch("argus.cli.collect_crowdsec_evidence") as crowdsec,
             patch("argus.cli.collect_linux_auth_evidence") as linux,
             patch("argus.cli.collect_docker_evidence") as docker,
@@ -74,6 +75,7 @@ class InvestigationCommandTests(unittest.TestCase):
         crowdsec.assert_not_called()
         linux.assert_not_called()
         docker.assert_not_called()
+        self.clock_calls = clock.call_count
         return result
 
     def test_command_registration(self) -> None:
@@ -88,6 +90,10 @@ class InvestigationCommandTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("ARGUS INVESTIGATION", result.output)
         self.assertIn("No stored security events found.", result.output)
+        self.assertIn(f"Window (UTC, inclusive): {(_NOW - timedelta(hours=24)).isoformat()} -> {_NOW.isoformat()}", result.output)
+        self.assertIn("Matching events: 0", result.output)
+        self.assertIn("Displayed: 0", result.output)
+        self.assertEqual(self.clock_calls, 1)
         self.assertFalse(self.path.exists())
 
     def test_empty_database_and_empty_collection_are_graceful(self) -> None:
@@ -241,14 +247,98 @@ class InvestigationCommandTests(unittest.TestCase):
         self.assertNotIn("Old keyed", result.output)
         self.assertNotIn("New duplicate", result.output)
         self.assertEqual(result.output.count("  Collection: "), 1)
+        self.assertIn("Matching events: 2", result.output)
+        self.assertIn("Displayed: 1", result.output)
 
-    def test_default_limit_is_twenty_events(self) -> None:
-        self._save([_crowdsec(alert_id, message=f"Alert {alert_id}") for alert_id in range(22)])
+    def test_default_limit_is_one_hundred_events(self) -> None:
+        self._save([_crowdsec(alert_id, message=f"Alert {alert_id}") for alert_id in range(102)])
 
         result = self._invoke()
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertEqual(result.output.count("  Collection: "), 20)
+        self.assertEqual(result.output.count("  Collection: "), 100)
+        self.assertIn("Matching events: 102", result.output)
+        self.assertIn("Displayed: 100", result.output)
+
+    def test_default_window_uses_event_time_with_inclusive_boundaries(self) -> None:
+        cutoff = _NOW - timedelta(hours=24)
+        self._save(
+            [
+                _crowdsec(1, message="At cutoff", occurred_at=cutoff),
+                _crowdsec(2, message="Too old", occurred_at=cutoff - timedelta(microseconds=1)),
+                _crowdsec(3, message="At now", occurred_at=_NOW),
+                _crowdsec(4, message="Future", occurred_at=_NOW + timedelta(microseconds=1)),
+                _linux(message="Invalid user observed from 192.0.2.1", observed_at=cutoff),
+            ],
+            at=_NOW - timedelta(days=30),
+        )
+
+        result = self._invoke()
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("At cutoff", result.output)
+        self.assertIn("At now", result.output)
+        self.assertIn("SSH invalid user", result.output)
+        self.assertNotIn("Too old", result.output)
+        self.assertNotIn("Future", result.output)
+        self.assertIn("Matching events: 3", result.output)
+        self.assertEqual(self.clock_calls, 1)
+
+    def test_custom_windows_and_all_history(self) -> None:
+        self._save(
+            [
+                _crowdsec(1, message="Recent", occurred_at=_NOW - timedelta(hours=23)),
+                _crowdsec(2, message="Two days", occurred_at=_NOW - timedelta(hours=47)),
+                _crowdsec(3, message="Week", occurred_at=_NOW - timedelta(hours=167)),
+                _crowdsec(4, message="Older", occurred_at=_NOW - timedelta(hours=169)),
+            ]
+        )
+
+        for args, count in (((), 1), (("--hours", "48"), 2), (("--hours", "168"), 3), (("--all",), 4)):
+            with self.subTest(args=args):
+                result = self._invoke(*args)
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIn(f"Matching events: {count}", result.output)
+                self.assertEqual(result.output.count("  Collection: "), count)
+                self.assertEqual(self.clock_calls, 1)
+        self.assertIn("All stored history (unbounded)", result.output)
+        self.assertIn(f"Reference time (UTC): {_NOW.isoformat()}", result.output)
+
+    def test_deduplication_precedes_window_selection(self) -> None:
+        first = self._save([_crowdsec(12, message="Old identity", occurred_at=_NOW - timedelta(hours=25))])
+        self._save([_crowdsec(12, message="Recent duplicate", occurred_at=_NOW - timedelta(hours=1))])
+        self._save([_crowdsec(message="Recent unkeyed", occurred_at=_NOW - timedelta(hours=2))])
+
+        result = self._invoke()
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertNotIn("Old identity", result.output)
+        self.assertNotIn("Recent duplicate", result.output)
+        self.assertIn("Recent unkeyed", result.output)
+        self.assertIn("Matching events: 1", result.output)
+        all_result = self._invoke("--all")
+        self.assertIn("Old identity", all_result.output)
+        self.assertIn(f"Collection: {first}", all_result.output)
+        self.assertNotIn("Recent duplicate", all_result.output)
+
+    def test_empty_window_reports_zero_matches(self) -> None:
+        self._save([_crowdsec(1, occurred_at=_NOW - timedelta(hours=25))])
+
+        result = self._invoke()
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Matching events: 0", result.output)
+        self.assertIn("Displayed: 0", result.output)
+        self.assertIn("No stored security events found.", result.output)
+
+    def test_invalid_hours_and_incompatible_options_are_rejected(self) -> None:
+        for args in (("--hours", "0"), ("--hours", "-1"), ("--hours", "abc"), ("--hours", "24", "--all")):
+            with self.subTest(args=args):
+                result = self._invoke(*args)
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertIn("--hours", result.output)
+                self.assertEqual(self.clock_calls, 0)
+                self.assertFalse(self.path.exists())
 
     def test_invalid_limit_and_source_are_rejected_before_storage(self) -> None:
         for args in (("--limit", "0"), ("--source", "docker")):

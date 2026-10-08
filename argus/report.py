@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 
 from argus.analysis import DailySecurityBrief
 from argus.models import Evidence, SecurityEvent, Severity, TimestampBasis
@@ -71,16 +72,42 @@ def render_daily_security_brief(brief: DailySecurityBrief) -> str:
     return "\n".join(lines)
 
 
-def render_investigation(events: Iterable[tuple[SecurityEvent, int]]) -> str:
+def render_investigation(
+    events: Iterable[tuple[SecurityEvent, int]],
+    *,
+    window_start: datetime | None,
+    window_end: datetime,
+    matching_total: int,
+) -> str:
     """Render deduplicated historical events with their stored collection IDs."""
+    displayed = tuple(events)
+    window_label = (
+        f"Window (UTC, inclusive): {window_start.isoformat()} -> {window_end.isoformat()}"
+        if window_start is not None
+        else "Window (UTC): All stored history (unbounded)"
+    )
     lines = [
         "ARGUS INVESTIGATION",
+        "",
+        window_label,
+        f"Reference time (UTC): {window_end.isoformat()}",
+        f"Matching events: {matching_total}",
+        f"Displayed: {len(displayed)}",
         "",
         "Security events reconstructed from stored observations.",
         "Repeated identities use the earliest stored collection; this may not be "
         "the event's first occurrence.",
     ]
-    for event, collection_id in events:
+    if not displayed:
+        lines.extend(
+            [
+                "",
+                "No stored security events found.",
+                "The selected window may contain no matching events.",
+                "Run `argus collect` to save a telemetry snapshot.",
+            ]
+        )
+    for event, collection_id in displayed:
         basis = (
             "SOURCE (occurrence time)"
             if event.timestamp_basis is TimestampBasis.SOURCE

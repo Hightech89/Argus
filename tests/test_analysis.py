@@ -6,7 +6,12 @@ import unittest
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
 
-from argus.analysis import EventWindow, deduplicate_events, select_event_window
+from argus.analysis import (
+    EventWindow,
+    deduplicate_events,
+    select_event_window,
+    select_historical_event_window,
+)
 from argus.models import Evidence, SecurityEvent, Severity, TimestampBasis
 
 _NOW = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
@@ -188,6 +193,42 @@ class EventWindowTests(unittest.TestCase):
             with self.subTest(window=window):
                 with self.assertRaises(ValueError):
                     select_event_window([], now=_NOW, window=window)
+
+
+class HistoricalEventWindowTests(unittest.TestCase):
+    def test_inclusive_boundaries_and_collection_attribution(self) -> None:
+        cutoff = _NOW - timedelta(hours=24)
+        at_cutoff = _event("cutoff", cutoff)
+        at_now = _event("now", _NOW, TimestampBasis.OBSERVED)
+        old = _event("old", cutoff - timedelta(microseconds=1))
+        future = _event("future", _NOW + timedelta(microseconds=1))
+        records = [(old, 1), (at_cutoff, 2), (at_now, 3), (future, 4)]
+
+        result = select_historical_event_window(iter(records), now=_NOW, window=timedelta(hours=24))
+
+        self.assertEqual(result, ((at_cutoff, 2), (at_now, 3)))
+        self.assertIsInstance(result, tuple)
+        self.assertIs(result[0][0], at_cutoff)
+        self.assertEqual(records[1], (at_cutoff, 2))
+
+    def test_basis_does_not_change_timestamp_selection(self) -> None:
+        inside = _NOW - timedelta(hours=1)
+        source = _event("source", inside)
+        observed = _event("observed", inside, TimestampBasis.OBSERVED)
+        result = select_historical_event_window(
+            [(source, 99), (observed, 1)], now=_NOW, window=timedelta(hours=24)
+        )
+        self.assertEqual(result, ((source, 99), (observed, 1)))
+
+    def test_invalid_clock_and_window_are_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            select_historical_event_window([], now=_NOW.replace(tzinfo=None), window=timedelta(hours=1))
+        with self.assertRaises(TypeError):
+            select_historical_event_window([], now="today", window=timedelta(hours=1))
+        with self.assertRaises(ValueError):
+            select_historical_event_window([], now=_NOW, window=timedelta(0))
+        with self.assertRaises(TypeError):
+            select_historical_event_window([], now=_NOW, window=1)
 
 
 if __name__ == "__main__":

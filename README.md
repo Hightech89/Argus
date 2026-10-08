@@ -129,17 +129,25 @@ security events.
 `argus investigate` reads saved collection runs without collecting live data or
 changing the database. It interprets CrowdSec and Linux auth Evidence, retains
 the earliest stored observation of each authoritative identity, and keeps every
-event without an identity. It then shows events newest-first by event timestamp.
-The default is 20 events; for example:
+event without an identity. By default it selects the last 24 hours and displays
+up to 100 events, newest first. Use `--hours` for a positive integer lookback or
+`--all` for the entire stored history; these options cannot be combined. For
+example:
 
 ```bash
 argus investigate --limit 50 --source linux-auth
+argus investigate --hours 48
+argus investigate --hours 168
+argus investigate --all
 ```
 
-`--source` accepts `all` (default), `crowdsec`, or `linux-auth`. The filter runs
-before deduplication, and `--limit` runs after deduplication and sorting. Every
-event shows its stored collection ID. An `OBSERVED` timestamp is the time Argus
-saw the Evidence; the actual occurrence time is unknown. The retained collection
+`--source` accepts `all` (default), `crowdsec`, or `linux-auth`. Source filtering
+and deduplication happen before the inclusive event-time window; sorting and
+`--limit` happen afterward. The report shows the UTC window, total matching
+events before the limit, and number displayed. Every event shows its stored
+collection ID. A `SOURCE` timestamp is occurrence time. An `OBSERVED` timestamp
+is the time Argus saw the Evidence; the actual occurrence time is unknown.
+Collection time does not determine window membership. The retained collection
 is the earliest saved observation of an identity, which may not be the event's
 first occurrence.
 
