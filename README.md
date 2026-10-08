@@ -25,7 +25,7 @@ The current read-only collectors are:
 - CrowdSec
 - Linux SSH authentication via the local systemd journal
 
-Four CLI commands are available:
+Five CLI commands are available:
 
 - `argus brief` reports current Docker and CrowdSec operational status.
 - `argus daily` produces a deterministic rolling 24-hour CrowdSec and Linux SSH
@@ -34,6 +34,8 @@ Four CLI commands are available:
   snapshot.
 - `argus history` shows recent stored collection snapshots and observation
   counts.
+- `argus investigate` reconstructs historical CrowdSec and Linux SSH security
+  events from stored observations.
 
 The Daily Security Brief pipeline is:
 
@@ -99,6 +101,7 @@ argus brief
 argus daily
 argus collect
 argus history
+argus investigate
 ```
 
 Representative `argus brief` header:
@@ -122,6 +125,23 @@ sources.
 choose another positive number. Its counts describe stored observations grouped
 by collection run. They are not unique attacks, incidents, or deduplicated
 security events.
+
+`argus investigate` reads saved collection runs without collecting live data or
+changing the database. It interprets CrowdSec and Linux auth Evidence, retains
+the earliest stored observation of each authoritative identity, and keeps every
+event without an identity. It then shows events newest-first by event timestamp.
+The default is 20 events; for example:
+
+```bash
+argus investigate --limit 50 --source linux-auth
+```
+
+`--source` accepts `all` (default), `crowdsec`, or `linux-auth`. The filter runs
+before deduplication, and `--limit` runs after deduplication and sorting. Every
+event shows its stored collection ID. An `OBSERVED` timestamp is the time Argus
+saw the Evidence; the actual occurrence time is unknown. The retained collection
+is the earliest saved observation of an identity, which may not be the event's
+first occurrence.
 
 By default, snapshots are stored in:
 

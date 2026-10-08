@@ -123,6 +123,16 @@ Evidence counts by source family. It does not interpret observations as
 incidents, deduplicate them, calculate trends, or persist `SecurityEvent`
 records.
 
+`argus investigate` reads stored collections in ID order, interprets CrowdSec
+and Linux auth Evidence, applies an optional source filter, and passes the
+resulting events to `deduplicate_events()`. It attributes a retained event to
+the earliest stored collection containing that identity, which may not be its
+first real occurrence. Events without identity remain separate. It then sorts
+retained events by event timestamp, newest first, with input order preserved for
+ties, and applies the display limit. `OBSERVED` timestamps are labelled as
+observation times with unknown occurrence time. The command reads stored
+Evidence only; no event rows or schema changes are involved.
+
 Rolling windows use inclusive cutoff and current-time boundaries. Events with
 source timestamps are selected as known occurrences; events using observation
 time are selected separately because their actual occurrence time is unknown.

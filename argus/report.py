@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from argus.analysis import DailySecurityBrief
-from argus.models import Evidence, SecurityEvent, Severity
+from argus.models import Evidence, SecurityEvent, Severity, TimestampBasis
 
 CHECK = "\u2713"
 BULLET = "\u2022"
@@ -68,6 +68,33 @@ def render_daily_security_brief(brief: DailySecurityBrief) -> str:
             events=brief.observed,
         )
     )
+    return "\n".join(lines)
+
+
+def render_investigation(events: Iterable[tuple[SecurityEvent, int]]) -> str:
+    """Render deduplicated historical events with their stored collection IDs."""
+    lines = [
+        "ARGUS INVESTIGATION",
+        "",
+        "Security events reconstructed from stored observations.",
+        "Repeated identities use the earliest stored collection; this may not be "
+        "the event's first occurrence.",
+    ]
+    for event, collection_id in events:
+        basis = (
+            "SOURCE (occurrence time)"
+            if event.timestamp_basis is TimestampBasis.SOURCE
+            else "OBSERVED (observation time; occurrence unknown)"
+        )
+        lines.extend(
+            [
+                "",
+                f"{BULLET} {event.timestamp.isoformat()} | {basis} | "
+                f"{event.source} | {event.severity.value} | {event.summary}",
+                f"  Collection: {collection_id}",
+            ]
+        )
+        lines.extend(_render_event_details(event.details))
     return "\n".join(lines)
 
 
