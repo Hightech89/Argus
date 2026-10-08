@@ -24,6 +24,8 @@ def collect_linux_auth_evidence() -> list[Evidence]:
         "--since",
         "24 hours ago",
         "SYSLOG_IDENTIFIER=sshd",
+        "+",
+        "SYSLOG_IDENTIFIER=sshd-session",
     ]
     try:
         result = subprocess.run(

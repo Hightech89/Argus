@@ -9,12 +9,13 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from argus.collectors import collect_linux_auth_evidence
+from argus.events import linux_auth_events_from_evidence
 from argus.models import Evidence
 
 _NOW = datetime(2026, 10, 7, 18, 30, tzinfo=timezone.utc)
 _COMMAND = [
     "journalctl", "--no-pager", "--output=json", "--since", "24 hours ago",
-    "SYSLOG_IDENTIFIER=sshd",
+    "SYSLOG_IDENTIFIER=sshd", "+", "SYSLOG_IDENTIFIER=sshd-session",
 ]
 
 
@@ -100,6 +101,36 @@ class LinuxAuthCollectorTests(unittest.TestCase):
         self.assertEqual(evidence[3].content, json.dumps(second, sort_keys=True, separators=(",", ":")))
         self.assertTrue(all(record.observed_at is _NOW for record in evidence))
         self.clock.assert_called_once_with()
+
+    def test_records_from_both_syslog_identifiers_produce_ssh_events(self) -> None:
+        first = {
+            "SYSLOG_IDENTIFIER": "sshd",
+            "MESSAGE": "Accepted password for alice from 192.0.2.1 port 22",
+        }
+        second = {
+            "SYSLOG_IDENTIFIER": "sshd-session",
+            "MESSAGE": "Failed publickey for bob from 192.0.2.2 port 22",
+        }
+        output = "\n".join((json.dumps(first), json.dumps(second)))
+        with patch(
+            "argus.collectors.subprocess.run",
+            return_value=subprocess.CompletedProcess(_COMMAND, 0, output, ""),
+        ) as run:
+            evidence = collect_linux_auth_evidence()
+
+        run.assert_called_once_with(
+            _COMMAND, capture_output=True, check=False, text=True, timeout=10
+        )
+        events = linux_auth_events_from_evidence(evidence)
+        self.assertEqual(len(events), 2)
+        self.assertEqual(
+            [event.summary for event in events],
+            ["SSH login accepted", "SSH login failed"],
+        )
+        self.assertEqual(
+            [event.evidence[0].source for event in events],
+            ["linux.auth.raw", "linux.auth.raw"],
+        )
 
     def test_malformed_lines_and_nonobjects_are_skipped(self) -> None:
         output = '\n'.join(('garbage', '[]', '{"MESSAGE":"ok"}', '{broken', '42'))
