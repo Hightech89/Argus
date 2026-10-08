@@ -10,7 +10,69 @@ from typing import Any
 from argus.models import Evidence
 
 DOCKER_TIMEOUT_SECONDS = 10
+JOURNAL_TIMEOUT_SECONDS = 10
 CROWDSEC_CONTAINER_NAME = "crowdsec"
+
+
+def collect_linux_auth_evidence() -> list[Evidence]:
+    """Collect sshd journal observations from the previous 24 hours."""
+    observed_at = _utc_now()
+    command = [
+        "journalctl",
+        "--no-pager",
+        "--output=json",
+        "--since",
+        "24 hours ago",
+        "SYSLOG_IDENTIFIER=sshd",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=JOURNAL_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        return _linux_auth_failure("journalctl command not found.", observed_at)
+    except subprocess.TimeoutExpired:
+        return _linux_auth_failure("journalctl command timed out.", observed_at)
+    except OSError as error:
+        return _linux_auth_failure(f"journalctl could not run: {error}", observed_at)
+
+    if result.returncode != 0:
+        return _linux_auth_failure(
+            result.stderr.strip()
+            or f"journalctl exited with status {result.returncode}.",
+            observed_at,
+        )
+
+    raw_records: list[Evidence] = []
+    for line in result.stdout.splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            raw_records.append(
+                Evidence(
+                    source="linux.auth.raw",
+                    content=json.dumps(record, sort_keys=True, separators=(",", ":")),
+                    observed_at=observed_at,
+                )
+            )
+    return [
+        _boolean_evidence("linux.auth.available", True, observed_at),
+        Evidence("linux.auth.records_count", str(len(raw_records)), observed_at),
+        *raw_records,
+    ]
+
+
+def _linux_auth_failure(message: str, observed_at: datetime) -> list[Evidence]:
+    return [
+        _boolean_evidence("linux.auth.available", False, observed_at),
+        Evidence("linux.auth.error", message, observed_at),
+    ]
 
 
 def collect_docker_evidence() -> list[Evidence]:

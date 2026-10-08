@@ -26,6 +26,7 @@ _DETAIL_LABELS = {
     "decision_scope": "Decision Scope",
     "decision_value": "Decision Value",
     "decision_duration": "Decision Duration",
+    "remote_ip": "Remote IP",
 }
 
 

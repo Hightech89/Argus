@@ -6,8 +6,12 @@ import typer
 
 from argus import __version__
 from argus.analysis import build_daily_security_brief, select_event_window
-from argus.collectors import collect_crowdsec_evidence, collect_docker_evidence
-from argus.events import crowdsec_events_from_evidence
+from argus.collectors import (
+    collect_crowdsec_evidence,
+    collect_docker_evidence,
+    collect_linux_auth_evidence,
+)
+from argus.events import crowdsec_events_from_evidence, linux_auth_events_from_evidence
 from argus.report import render_brief, render_daily_security_brief
 from argus.storage import EvidenceStore, default_database_path
 
@@ -31,10 +35,14 @@ def brief() -> None:
 
 @app.command()
 def daily() -> None:
-    """Show CrowdSec security activity from the rolling 24-hour window."""
-    evidence = collect_crowdsec_evidence()
+    """Show CrowdSec and SSH security activity from the rolling 24-hour window."""
+    crowdsec_evidence = collect_crowdsec_evidence()
+    linux_auth_evidence = collect_linux_auth_evidence()
     now = _utc_now()
-    events = crowdsec_events_from_evidence(evidence)
+    events = [
+        *crowdsec_events_from_evidence(crowdsec_evidence),
+        *linux_auth_events_from_evidence(linux_auth_evidence),
+    ]
     event_window = select_event_window(events, now=now)
     brief = build_daily_security_brief(
         event_window,
@@ -46,7 +54,7 @@ def daily() -> None:
 
 @app.command()
 def collect() -> None:
-    """Collect and persist one Docker and CrowdSec telemetry snapshot."""
+    """Collect and persist one Docker, CrowdSec, and Linux auth snapshot."""
     try:
         database_path = default_database_path()
         database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,7 +65,8 @@ def collect() -> None:
 
         docker_evidence = collect_docker_evidence()
         crowdsec_evidence = collect_crowdsec_evidence()
-        evidence = [*docker_evidence, *crowdsec_evidence]
+        linux_auth_evidence = collect_linux_auth_evidence()
+        evidence = [*docker_evidence, *crowdsec_evidence, *linux_auth_evidence]
         collection_id = store.add_collection(evidence, collected_at=collected_at)
     except Exception as error:
         typer.echo(f"ARGUS COLLECTION FAILED: {error}", err=True)
@@ -72,6 +81,7 @@ def collect() -> None:
                 f"Evidence stored: {len(evidence)}",
                 f"Docker records: {len(docker_evidence)}",
                 f"CrowdSec records: {len(crowdsec_evidence)}",
+                f"Linux auth records: {len(linux_auth_evidence)}",
                 f"Database: {database_path}",
             )
         )
@@ -99,13 +109,19 @@ def history(
             crowdsec_count = sum(
                 record.source.startswith("crowdsec.") for record in evidence
             )
-            other_count = len(evidence) - docker_count - crowdsec_count
+            linux_auth_count = sum(
+                record.source.startswith("linux.auth.") for record in evidence
+            )
+            other_count = (
+                len(evidence) - docker_count - crowdsec_count - linux_auth_count
+            )
             lines = [
                 f"Collection {collection.id}",
                 f"Time: {collection.collected_at.isoformat()}",
                 f"Evidence: {len(evidence)}",
                 f"Docker records: {docker_count}",
                 f"CrowdSec records: {crowdsec_count}",
+                f"Linux auth records: {linux_auth_count}",
             ]
             if other_count:
                 lines.append(f"Other records: {other_count}")

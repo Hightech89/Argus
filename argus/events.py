@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from argus.models import Evidence, SecurityEvent, Severity, TimestampBasis
@@ -16,6 +17,15 @@ _CROWDSEC_LATEST_TIMESTAMP = "crowdsec.alert.latest_timestamp"
 _CROWDSEC_RAW = "crowdsec.alert.raw"
 _CROWDSEC_TIMESTAMP_FIELDS = ("created_at", "start_at", "stop_at", "updated_at")
 _CROWDSEC_SUMMARY_FIELDS = ("message", "reason", "scenario")
+_LINUX_AUTH_RAW = "linux.auth.raw"
+_JOURNAL_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_SSH_ACCEPTED = re.compile(
+    r"^Accepted (password|publickey) for (\S+) from (\S+)(?:\s|$)"
+)
+_SSH_FAILED = re.compile(
+    r"^Failed (password|publickey) for (?:invalid user )?(\S+) from (\S+)(?:\s|$)"
+)
+_SSH_INVALID_USER = re.compile(r"^Invalid user (\S+) from (\S+)(?:\s|$)")
 
 
 def crowdsec_events_from_evidence(
@@ -94,6 +104,88 @@ def crowdsec_event_from_evidence(
         summary=summary,
         evidence=supporting_evidence,
     )
+
+
+def linux_auth_events_from_evidence(
+    evidence: Iterable[Evidence],
+) -> list[SecurityEvent]:
+    """Interpret supported SSH authentication messages from raw journal records."""
+    events: list[SecurityEvent] = []
+    for record in evidence:
+        if record.source != _LINUX_AUTH_RAW:
+            continue
+        journal = _parse_raw_alert(record.content)
+        if journal is None or not isinstance(journal.get("MESSAGE"), str):
+            continue
+        message = journal["MESSAGE"]
+        accepted = _SSH_ACCEPTED.match(message)
+        failed = _SSH_FAILED.match(message)
+        invalid = _SSH_INVALID_USER.match(message)
+        if accepted:
+            event_type, severity, summary = (
+                "ssh_login_success", Severity.INFO, "SSH login accepted"
+            )
+            method, username, remote_ip = accepted.groups()
+        elif failed:
+            event_type, severity, summary = (
+                "ssh_login_failure", Severity.LOW, "SSH login failed"
+            )
+            method, username, remote_ip = failed.groups()
+        elif invalid:
+            event_type, severity, summary = (
+                "ssh_invalid_user", Severity.LOW, "SSH invalid user"
+            )
+            username, remote_ip = invalid.groups()
+            method = None
+        else:
+            continue
+
+        timestamp = _journal_timestamp(journal.get("__REALTIME_TIMESTAMP"))
+        if timestamp is not None:
+            basis = TimestampBasis.SOURCE
+        elif record.observed_at is not None and _is_aware(record.observed_at):
+            timestamp = record.observed_at
+            basis = TimestampBasis.OBSERVED
+        else:
+            continue
+        cursor = journal.get("__CURSOR")
+        identity = (
+            f"linux-auth:journal:{cursor.strip()}"
+            if isinstance(cursor, str) and cursor.strip()
+            else None
+        )
+        details = (
+            ("event_type", event_type),
+            ("username", username),
+            ("remote_ip", remote_ip),
+        )
+        if method is not None:
+            details += (("auth_method", method),)
+        events.append(
+            SecurityEvent(
+                timestamp=timestamp,
+                timestamp_basis=basis,
+                source="linux-auth",
+                category="authentication",
+                severity=severity,
+                summary=summary,
+                evidence=(record,),
+                details=details,
+                identity=identity,
+            )
+        )
+    return events
+
+
+def _journal_timestamp(value: object) -> datetime | None:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return None
+    if isinstance(value, str) and not value.isdecimal():
+        return None
+    try:
+        return _JOURNAL_EPOCH + timedelta(microseconds=int(value))
+    except (OverflowError, ValueError):
+        return None
 
 
 def _first_record(records: list[Evidence], source: str) -> Evidence | None:

@@ -23,20 +23,22 @@ The current read-only collectors are:
 
 - Docker
 - CrowdSec
+- Linux SSH authentication via the local systemd journal
 
 Four CLI commands are available:
 
 - `argus brief` reports current Docker and CrowdSec operational status.
-- `argus daily` produces a deterministic rolling 24-hour CrowdSec security
-  activity brief.
-- `argus collect` explicitly saves one Docker and CrowdSec telemetry snapshot.
+- `argus daily` produces a deterministic rolling 24-hour CrowdSec and Linux SSH
+  authentication security brief.
+- `argus collect` explicitly saves one Docker, CrowdSec, and Linux auth telemetry
+  snapshot.
 - `argus history` shows recent stored collection snapshots and observation
   counts.
 
 The Daily Security Brief pipeline is:
 
 ```text
-CrowdSec
+CrowdSec + Linux SSH authentication
 -> Evidence
 -> SecurityEvent
 -> EventWindow
@@ -44,9 +46,10 @@ CrowdSec
 -> renderer
 ```
 
-`SOURCE` timestamps represent known event occurrence time. When CrowdSec does
-not provide a usable event timestamp, Argus uses the Evidence collection time
-with an `OBSERVED` timestamp basis. Observed-time fallback alerts are displayed
+`SOURCE` timestamps represent known event occurrence time. CrowdSec uses its
+source timestamp; Linux SSH authentication uses journald's microsecond Unix
+timestamp. When either is unusable, Argus uses the Evidence observation time
+with an `OBSERVED` timestamp basis. Observed-time fallback events are displayed
 separately so they are not presented as known occurrence-time events.
 
 Docker contributes operational status to `argus brief`; Docker security events
@@ -106,10 +109,15 @@ ARGUS v0.2
 Evidence-driven Security Operations Copilot
 ```
 
-The collection commands use local Docker access. `argus brief` shows current
-operational status, while `argus daily` shows the current rolling CrowdSec
-security view. Neither command writes to storage. `argus collect` explicitly
-saves one telemetry snapshot without interpreting Evidence as security events.
+`argus brief` shows current Docker and CrowdSec operational status. `argus daily`
+shows the current rolling CrowdSec and Linux SSH security view. Neither command
+writes to storage. `argus collect` explicitly saves one telemetry snapshot
+without interpreting Evidence as security events. The Linux auth collector runs
+local `journalctl` for sshd records from the previous 24 hours; journal access
+depends on the host's permissions. CrowdSec supplies intrusion/detection
+telemetry, Linux auth supplies direct SSH authentication telemetry, and Docker
+supplies operational telemetry. Argus does not correlate the two security event
+sources.
 `argus history` reads up to 10 recent snapshots by default; use `--limit` to
 choose another positive number. Its counts describe stored observations grouped
 by collection run. They are not unique attacks, incidents, or deduplicated
@@ -146,7 +154,7 @@ python -m unittest discover -s tests -v
 ```
 
 The automated tests mock subprocess and collector boundaries and do not require
-live Docker or CrowdSec services.
+live Docker, CrowdSec, or journal access.
 
 ## Project Goals
 

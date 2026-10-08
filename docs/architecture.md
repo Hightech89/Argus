@@ -29,8 +29,8 @@ The architecture is intentionally small:
 - `argus.analysis` applies deterministic event selection and analysis policies.
 - `argus.report` renders collected evidence into operator-facing summaries.
 
-Version 0.2.0 includes Docker and CrowdSec evidence collection. There are no
-background processes, databases, external API integrations, correlation, or AI
+Version 0.3 development includes Docker, CrowdSec, and Linux SSH authentication
+evidence collection. There are no background processes, correlation, or AI
 features.
 
 `SecurityEvent` in `argus.models` is an immutable
@@ -77,6 +77,18 @@ array is present, the first decision object supplies decision details. Missing,
 blank, structured, or otherwise unusable optional values are omitted. The raw
 Evidence record remains unchanged and attached to the event.
 
+Linux auth collection runs local `journalctl` for `SYSLOG_IDENTIFIER=sshd` over
+the previous 24 hours. Every valid journal JSON object is preserved as one
+`linux.auth.raw` Evidence observation. Supported OpenSSH messages produce
+successful login, failed login, or invalid user `SecurityEvent` records with
+fixed `event_type`, `username`, `remote_ip`, and applicable `auth_method` details.
+Journald `__REALTIME_TIMESTAMP` provides UTC source time when usable; otherwise
+Evidence observation time is the fallback. A nonblank journald `__CURSOR`
+provides `linux-auth:journal:<cursor>` identity. No cursor means no identity.
+CrowdSec is intrusion/detection telemetry, Linux auth is direct SSH
+authentication telemetry, and Docker remains operational telemetry. Argus does
+not correlate CrowdSec and Linux auth events.
+
 The Daily Security Brief renderer reads only `SecurityEvent.details` when it
 shows indented context beneath an event. It does not parse supporting Evidence,
 alter summaries, or change aggregation counts.
@@ -85,14 +97,14 @@ Version 0.3 introduces optional local Evidence persistence through
 `argus.storage.EvidenceStore`:
 
 ```text
-Docker ───┐
-          ├──> Evidence ──> CollectionRun/EvidenceStore
-CrowdSec ─┘
+Docker ─────┐
+CrowdSec ───┼──> Evidence ──> CollectionRun/EvidenceStore
+Linux auth ─┘
 ```
 
 The store uses a caller-supplied SQLite file and deterministic insertion IDs.
-`argus collect` explicitly stores one Docker and CrowdSec snapshot. `argus
-brief` and `argus daily` remain read-only, `SecurityEvent` records are not
+`argus collect` explicitly stores one Docker, CrowdSec, and Linux auth snapshot.
+`argus brief` and `argus daily` remain read-only, `SecurityEvent` records are not
 persisted, and duplicate Evidence rows are intentionally preserved.
 `default_database_path()` resolves a nonblank
 `ARGUS_DB_PATH` override or defaults to `~/.argus/argus.db`.
@@ -118,8 +130,8 @@ The deterministic data flow is `Evidence` -> `SecurityEvent` -> `EventWindow`
 -> `DailySecurityBrief` -> `argus.report` renderer.
 
 `argus brief` presents current Docker and CrowdSec operational status. `argus
-daily` orchestrates the CrowdSec pipeline above for a rolling 24-hour security
-activity brief.
+daily` combines CrowdSec events first and Linux auth events second for a rolling
+24-hour security activity brief.
 
 ## Design Principles
 

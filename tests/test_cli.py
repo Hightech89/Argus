@@ -36,6 +36,43 @@ def _raw_alert(
 
 
 class DailyCommandTests(unittest.TestCase):
+    def test_daily_combines_crowdsec_then_linux_auth_after_both_collections(self) -> None:
+        crowdsec = _raw_alert("CrowdSec first", observed_at=_NOW - timedelta(minutes=2))
+        linux = Evidence(
+            "linux.auth.raw",
+            json.dumps({"MESSAGE": "Invalid user alice from 192.0.2.1"}),
+            _NOW - timedelta(minutes=1),
+        )
+        order: list[str] = []
+
+        def collect_crowdsec() -> list[Evidence]:
+            order.append("crowdsec")
+            return [crowdsec]
+
+        def collect_linux() -> list[Evidence]:
+            order.append("linux-auth")
+            return [linux]
+
+        def clock() -> datetime:
+            order.append("clock")
+            return _NOW
+
+        with (
+            patch("argus.cli.collect_crowdsec_evidence", side_effect=collect_crowdsec),
+            patch("argus.cli.collect_linux_auth_evidence", side_effect=collect_linux),
+            patch("argus.cli._utc_now", side_effect=clock) as clock_mock,
+        ):
+            result = self.runner.invoke(app, ["daily"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(order, ["crowdsec", "linux-auth", "clock"])
+        clock_mock.assert_called_once_with()
+        self.assertIn("Observed - Event Time Unknown\nTotal: 2", result.output)
+        self.assertLess(result.output.index("CrowdSec first"), result.output.index("SSH invalid user"))
+        self.assertIn("Event Type: ssh_invalid_user", result.output)
+        self.assertIn("Username: alice", result.output)
+        self.assertIn("Remote IP: 192.0.2.1", result.output)
+
     def test_daily_keeps_repeated_authoritatively_identified_observations(self) -> None:
         record = Evidence(
             "crowdsec.alert.raw",
@@ -50,6 +87,9 @@ class DailyCommandTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.runner = CliRunner()
+        linux_collector = patch("argus.cli.collect_linux_auth_evidence", return_value=[])
+        self.linux_collector = linux_collector.start()
+        self.addCleanup(linux_collector.stop)
 
     def _invoke_daily(self, evidence: list[Evidence]):
         with (
@@ -204,8 +244,53 @@ class DailyCommandTests(unittest.TestCase):
 
 
 class CollectCommandTests(unittest.TestCase):
+    def test_collect_stores_linux_auth_after_docker_and_crowdsec(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            docker = Evidence("docker.installed", "true", _NOW)
+            crowdsec = Evidence("crowdsec.available", "true", _NOW)
+            linux = Evidence("linux.auth.raw", '{"MESSAGE":"Invalid user a from 192.0.2.1"}', _NOW)
+            with (
+                patch("argus.cli.default_database_path", return_value=database_path),
+                patch("argus.cli._utc_now", return_value=_NOW),
+                patch("argus.cli.collect_docker_evidence", return_value=[docker]),
+                patch("argus.cli.collect_crowdsec_evidence", return_value=[crowdsec]),
+                patch("argus.cli.collect_linux_auth_evidence", return_value=[linux]) as linux_collector,
+            ):
+                result = self.runner.invoke(app, ["collect"])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            linux_collector.assert_called_once_with()
+            self.assertIn("Evidence stored: 3", result.output)
+            self.assertIn("Linux auth records: 1", result.output)
+            store = EvidenceStore(database_path)
+            self.assertEqual(store.list_collection_evidence(1), (docker, crowdsec, linux))
+            self.assertEqual(len(store.list_collections()), 1)
+
+    def test_collect_persists_linux_operational_error_evidence(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            linux_error = Evidence("linux.auth.error", "journalctl unavailable", _NOW)
+            with (
+                patch("argus.cli.default_database_path", return_value=database_path),
+                patch("argus.cli._utc_now", return_value=_NOW),
+                patch("argus.cli.collect_docker_evidence", return_value=[]),
+                patch("argus.cli.collect_crowdsec_evidence", return_value=[]),
+                patch("argus.cli.collect_linux_auth_evidence", return_value=[linux_error]),
+            ):
+                result = self.runner.invoke(app, ["collect"])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Linux auth records: 1", result.output)
+            self.assertEqual(
+                EvidenceStore(database_path).list_collection_evidence(1), (linux_error,)
+            )
+
     def setUp(self) -> None:
         self.runner = CliRunner()
+        linux_collector = patch("argus.cli.collect_linux_auth_evidence", return_value=[])
+        self.linux_collector = linux_collector.start()
+        self.addCleanup(linux_collector.stop)
 
     def test_collect_command_is_registered(self) -> None:
         result = self.runner.invoke(app, ["--help"])
@@ -379,6 +464,31 @@ class CollectCommandTests(unittest.TestCase):
 
 
 class HistoryCommandTests(unittest.TestCase):
+    def test_history_counts_linux_auth_observations_separately(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            store = EvidenceStore(database_path)
+            store.initialize()
+            store.add_collection(
+                [
+                    Evidence("docker.installed", "true"),
+                    Evidence("crowdsec.available", "true"),
+                    Evidence("linux.auth.available", "true"),
+                    Evidence("linux.auth.raw", "{}"),
+                    Evidence("manual.note", "other"),
+                ],
+                collected_at=_NOW,
+            )
+            with patch("argus.cli.default_database_path", return_value=database_path):
+                result = self.runner.invoke(app, ["history"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Evidence: 5", result.output)
+        self.assertIn("Docker records: 1", result.output)
+        self.assertIn("CrowdSec records: 1", result.output)
+        self.assertIn("Linux auth records: 2", result.output)
+        self.assertIn("Other records: 1", result.output)
+
     def setUp(self) -> None:
         self.runner = CliRunner()
 
