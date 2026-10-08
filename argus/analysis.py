@@ -9,6 +9,19 @@ from datetime import datetime, timedelta
 from argus.models import SecurityEvent, Severity, TimestampBasis
 
 
+def deduplicate_events(events: Iterable[SecurityEvent]) -> tuple[SecurityEvent, ...]:
+    """Keep the first event per identity and every event without an identity."""
+    seen: set[str] = set()
+    retained: list[SecurityEvent] = []
+    for event in events:
+        if event.identity is not None:
+            if event.identity in seen:
+                continue
+            seen.add(event.identity)
+        retained.append(event)
+    return tuple(retained)
+
+
 @dataclass(frozen=True)
 class EventWindow:
     """Events selected by occurrence time and observation time."""

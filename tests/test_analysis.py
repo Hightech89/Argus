@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
 
-from argus.analysis import EventWindow, select_event_window
+from argus.analysis import EventWindow, deduplicate_events, select_event_window
 from argus.models import Evidence, SecurityEvent, Severity, TimestampBasis
 
 _NOW = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
@@ -27,6 +27,71 @@ def _event(
         summary=summary,
         evidence=(evidence,),
     )
+
+
+class DeduplicateEventsTests(unittest.TestCase):
+    def test_empty_iterable_returns_empty_tuple(self) -> None:
+        self.assertEqual(deduplicate_events(iter(())), ())
+
+    def test_keyed_duplicates_keep_first_input_occurrence(self) -> None:
+        first = replace(_event("first", _NOW), identity="test:event:12")
+        second = replace(
+            _event("enriched later", _NOW + timedelta(minutes=1)),
+            identity="test:event:12",
+            details=(("context", "new"),),
+        )
+
+        result = deduplicate_events([first, second])
+
+        self.assertEqual(result, (first,))
+        self.assertIs(result[0], first)
+        self.assertIs(deduplicate_events([second, first])[0], second)
+
+    def test_unkeyed_events_are_never_deduplicated(self) -> None:
+        first = _event("same", _NOW)
+        equal_but_distinct = _event("same", _NOW)
+
+        result = deduplicate_events([first, first, equal_but_distinct])
+
+        self.assertEqual(len(result), 3)
+        self.assertIs(result[0], first)
+        self.assertIs(result[1], first)
+        self.assertIs(result[2], equal_but_distinct)
+
+    def test_mixed_ordering_and_distinct_source_identities_are_preserved(self) -> None:
+        unkeyed = _event("unkeyed", _NOW)
+        first = replace(_event("keyed first", _NOW), identity="test:event:12")
+        duplicate = replace(_event("keyed duplicate", _NOW), identity=first.identity)
+        other = replace(_event("other source", _NOW), identity="other:event:12")
+
+        result = deduplicate_events(iter([unkeyed, first, duplicate, unkeyed, other]))
+
+        self.assertEqual(result, (unkeyed, first, unkeyed, other))
+
+    def test_input_events_and_supporting_evidence_are_not_mutated_or_merged(self) -> None:
+        first = replace(_event("first", _NOW), identity="test:event:12")
+        second = replace(_event("second", _NOW), identity=first.identity)
+        events = [first, second]
+        before = tuple(events)
+        first_evidence = first.evidence
+        second_evidence = second.evidence
+
+        result = deduplicate_events(events)
+
+        self.assertEqual(tuple(events), before)
+        self.assertIs(result[0], first)
+        self.assertIs(first.evidence, first_evidence)
+        self.assertIs(second.evidence, second_evidence)
+        self.assertEqual(first.evidence[0].content, "first")
+        self.assertEqual(second.evidence[0].content, "second")
+
+    def test_return_value_is_an_immutable_tuple(self) -> None:
+        event = _event("unkeyed", _NOW)
+        result = deduplicate_events([event])
+
+        self.assertIsInstance(result, tuple)
+        with self.assertRaises(TypeError):
+            result[0] = _event("changed", _NOW)
 
 
 class EventWindowTests(unittest.TestCase):

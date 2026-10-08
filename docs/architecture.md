@@ -41,6 +41,21 @@ nonempty tuple. Its optional `details` field is an immutable tuple of string
 key-value tuples. This generic representation can carry source-specific context
 without adding CrowdSec fields to the shared event model.
 
+`SecurityEvent.identity` is an optional, source-agnostic string representing
+authoritative source identity. For raw CrowdSec alerts, only the alert `id`
+defines `crowdsec:alert:<id>`: nonblank strings are trimmed and preserved;
+finite numeric IDs use a deterministic decimal representation (integral floats
+match integer IDs). Booleans and structured or non-finite values are unusable.
+Missing or unusable IDs yield `identity=None`, meaning Argus cannot safely
+assert sameness. No fallback hash or heuristic identity is generated.
+
+`argus.analysis.deduplicate_events()` produces a derived event view: it keeps
+the first occurrence of each identity in caller-supplied input order and every
+event with `identity=None`, returning an immutable tuple of the original events.
+It does not mutate or merge events or their evidence. Evidence observations are
+always preserved in SQLite, including duplicates. Live `argus daily` does not
+apply this deduplication view.
+
 `Evidence.observed_at` is the timezone-aware UTC time Argus began a collector
 invocation. Every record from that invocation shares the same observation time;
 the field remains optional for evidence created outside the live collectors.
@@ -78,15 +93,15 @@ CrowdSec ─┘
 The store uses a caller-supplied SQLite file and deterministic insertion IDs.
 `argus collect` explicitly stores one Docker and CrowdSec snapshot. `argus
 brief` and `argus daily` remain read-only, `SecurityEvent` records are not
-persisted, and duplicate Evidence rows are intentionally allowed because no
-deduplication policy exists yet. `default_database_path()` resolves a nonblank
+persisted, and duplicate Evidence rows are intentionally preserved.
+`default_database_path()` resolves a nonblank
 `ARGUS_DB_PATH` override or defaults to `~/.argus/argus.db`.
 
 Collection runs are snapshot boundaries, not incidents, unique alerts, or
 deduplicated events. `add_collection()` stores one run with its timezone-aware
 collection time and all Evidence observations in a single transaction;
 `list_collection_evidence()` retrieves them in insertion order. Duplicate
-Evidence across runs remains valid; deduplication does not exist yet.
+Evidence across runs remains valid; storage never deduplicates observations.
 Standalone `add()` and `add_many()` records have no collection association.
 Initialization upgrades existing databases in place, preserving their Evidence.
 The stored records are observations, not unique incidents. `argus brief` and

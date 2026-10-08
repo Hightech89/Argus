@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
+from argus.analysis import deduplicate_events
 from argus.events import crowdsec_event_from_evidence, crowdsec_events_from_evidence
 from argus.models import Evidence, Severity, TimestampBasis
+from argus.storage import EvidenceStore
 
 _OBSERVED_AT = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
 
@@ -53,6 +57,98 @@ def _raw(alert: object, observed_at: datetime | None = _OBSERVED_AT) -> Evidence
 
 
 class CrowdSecRawEventsTests(unittest.TestCase):
+    def test_numeric_alert_ids_produce_canonical_identity(self) -> None:
+        for alert_id, expected in ((12, "12"), (451, "451"), (12.0, "12"),
+                                   (12.5, "12.5"), (0, "0")):
+            with self.subTest(alert_id=alert_id):
+                event = crowdsec_events_from_evidence([_raw({"id": alert_id})])[0]
+                self.assertEqual(event.identity, f"crowdsec:alert:{expected}")
+
+    def test_string_alert_ids_are_trimmed_and_preserved(self) -> None:
+        for alert_id, expected in (("12", "12"), (" 451 \t", "451"),
+                                   ("opaque-id", "opaque-id"), ("0012", "0012")):
+            with self.subTest(alert_id=alert_id):
+                event = crowdsec_events_from_evidence([_raw({"id": alert_id})])[0]
+                self.assertEqual(event.identity, f"crowdsec:alert:{expected}")
+
+    def test_missing_blank_and_unusable_alert_ids_have_no_identity(self) -> None:
+        for alert_id in (None, "", " \t\n", True, False, [], {},
+                         float("nan"), float("inf"), float("-inf")):
+            with self.subTest(alert_id=alert_id):
+                event = crowdsec_events_from_evidence([_raw({"id": alert_id})])[0]
+                self.assertIsNone(event.identity)
+        self.assertIsNone(crowdsec_events_from_evidence([_raw({})])[0].identity)
+
+    def test_same_alert_id_across_observations_has_same_identity(self) -> None:
+        first = _raw({"id": 12}, _OBSERVED_AT)
+        second = _raw({"id": "12"}, _OBSERVED_AT + timedelta(hours=1))
+
+        events = crowdsec_events_from_evidence([first, second])
+
+        self.assertEqual([event.identity for event in events], ["crowdsec:alert:12"] * 2)
+        self.assertIs(events[0].evidence[0], first)
+        self.assertIs(events[1].evidence[0], second)
+
+    def test_different_alert_ids_have_different_identities(self) -> None:
+        events = crowdsec_events_from_evidence([_raw({"id": 12}), _raw({"id": 451})])
+
+        self.assertEqual(
+            [event.identity for event in events],
+            ["crowdsec:alert:12", "crowdsec:alert:451"],
+        )
+
+    def test_enrichment_and_summary_differences_do_not_change_identity(self) -> None:
+        minimal = _raw({"id": 42, "message": "First observation"})
+        enriched = _raw(_ENRICHED_ALERT)
+
+        first, second = crowdsec_events_from_evidence([minimal, enriched])
+
+        self.assertEqual(first.identity, second.identity)
+        self.assertNotEqual(first.summary, second.summary)
+        self.assertNotEqual(first.details, second.details)
+
+    def test_native_timestamp_differences_do_not_change_identity(self) -> None:
+        records = [
+            _raw({"id": 12, "created_at": "2026-10-03T11:45:00Z"}),
+            _raw({"id": 12, "created_at": "2026-10-03T11:50:00Z"}),
+        ]
+        first, second = crowdsec_events_from_evidence(records)
+
+        self.assertEqual(first.identity, second.identity)
+        self.assertNotEqual(first.timestamp, second.timestamp)
+        self.assertIs(first.timestamp_basis, TimestampBasis.SOURCE)
+        self.assertIs(second.timestamp_basis, TimestampBasis.SOURCE)
+
+    def test_deduplicated_view_preserves_all_stored_observations(self) -> None:
+        first = _raw({"id": 12}, _OBSERVED_AT)
+        second = _raw({"id": 12}, _OBSERVED_AT + timedelta(hours=1))
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "argus.db"
+            store = EvidenceStore(path)
+            store.initialize()
+            first_run = store.add_collection([first], collected_at=_OBSERVED_AT)
+            second_run = store.add_collection(
+                [second], collected_at=_OBSERVED_AT + timedelta(hours=1)
+            )
+            before = path.read_bytes()
+
+            events = crowdsec_events_from_evidence(store.list_evidence())
+            retained = deduplicate_events(events)
+
+            self.assertEqual(len(events), 2)
+            self.assertEqual(retained, (events[0],))
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(store.list_collection_evidence(first_run), (first,))
+            self.assertEqual(store.list_collection_evidence(second_run), (second,))
+
+    def test_legacy_conversion_does_not_infer_identity_from_summary(self) -> None:
+        record = Evidence("crowdsec.alert.latest", "12: ssh-bf", _OBSERVED_AT)
+
+        event = crowdsec_event_from_evidence([record])
+
+        self.assertIsNotNone(event)
+        self.assertIsNone(event.identity)
+
     def test_zero_raw_alerts_and_unrelated_evidence_return_empty_list(self) -> None:
         evidence = [
             Evidence("crowdsec.available", "true", _OBSERVED_AT),

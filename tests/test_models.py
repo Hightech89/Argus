@@ -38,6 +38,22 @@ def _event(**overrides: object) -> SecurityEvent:
 
 
 class SecurityEventTests(unittest.TestCase):
+    def test_identity_defaults_to_none(self) -> None:
+        self.assertIsNone(_event().identity)
+
+    def test_identity_is_generic_and_immutable(self) -> None:
+        event = _event(identity="another-source:event:12")
+
+        self.assertEqual(event.identity, "another-source:event:12")
+        with self.assertRaises(FrozenInstanceError):
+            event.identity = "another-source:event:13"
+
+    def test_identity_requires_a_string_or_none(self) -> None:
+        for identity in (12, True, [], {}):
+            with self.subTest(identity=identity):
+                with self.assertRaisesRegex(TypeError, "identity"):
+                    _event(identity=identity)
+
     def test_creates_event_with_supporting_evidence(self) -> None:
         event = _event()
 

@@ -51,8 +51,11 @@ class SecurityEvent:
     summary: str
     evidence: tuple[Evidence, ...]
     details: tuple[tuple[str, str], ...] = ()
+    identity: str | None = None
 
     def __post_init__(self) -> None:
+        if self.identity is not None and not isinstance(self.identity, str):
+            raise TypeError("identity must be a string or None")
         if not isinstance(self.timestamp, datetime):
             raise TypeError("timestamp must be a datetime")
         if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:

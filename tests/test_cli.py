@@ -36,6 +36,18 @@ def _raw_alert(
 
 
 class DailyCommandTests(unittest.TestCase):
+    def test_daily_keeps_repeated_authoritatively_identified_observations(self) -> None:
+        record = Evidence(
+            "crowdsec.alert.raw",
+            json.dumps({"id": 12, "message": "Repeated alert"}),
+            _NOW,
+        )
+
+        result = self._invoke_daily([record, record])
+
+        self.assertIn("Observed - Event Time Unknown\nTotal: 2", result.output)
+        self.assertEqual(result.output.count("Repeated alert"), 2)
+
     def setUp(self) -> None:
         self.runner = CliRunner()
 

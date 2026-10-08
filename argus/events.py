@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
@@ -50,6 +51,7 @@ def crowdsec_events_from_evidence(
                 summary=_raw_alert_summary(alert),
                 evidence=(record,),
                 details=_raw_alert_details(alert),
+                identity=_raw_alert_identity(alert),
             )
         )
 
@@ -120,6 +122,20 @@ def _raw_alert_timestamp(alert: dict[str, Any]) -> datetime | None:
         if timestamp is not None:
             return timestamp
     return None
+
+
+def _raw_alert_identity(alert: dict[str, Any]) -> str | None:
+    """Use only an authoritative CrowdSec alert ID, never inferred sameness."""
+    value = alert.get("id")
+    if isinstance(value, str):
+        alert_id = value.strip()
+    elif isinstance(value, int) and not isinstance(value, bool):
+        alert_id = str(value)
+    elif isinstance(value, float) and math.isfinite(value):
+        alert_id = str(int(value)) if value.is_integer() else str(value)
+    else:
+        return None
+    return f"crowdsec:alert:{alert_id}" if alert_id else None
 
 
 def _raw_alert_details(alert: dict[str, Any]) -> tuple[tuple[str, str], ...]:
