@@ -173,12 +173,67 @@ argus collect
 `argus daily` reads CrowdSec telemetry through the existing CrowdSec container
 and does not require a separate API integration.
 
+## Scheduled collection on the Raspberry Pi
+
+The repository includes a systemd oneshot service and timer under
+`deploy/systemd/`. The service runs the existing virtual-environment CLI as
+`joshpi` from `/home/joshpi/argus`, using that user's default database at
+`/home/joshpi/.argus/argus.db`. The timer requests a collection at each quarter
+hour. It does not run a persistent Python process. After downtime,
+`Persistent=true` schedules one catch-up activation rather than replaying every
+missed quarter hour. systemd will not overlap activations of the same service.
+Manual and timer-triggered `argus collect` processes use a non-blocking advisory
+lock at `/home/joshpi/.argus/argus.db.lock`; an overlapping invocation fails
+with a nonzero exit and a message in the service journal. The lock file may
+remain after exit, but the OS releases its lock when the process exits.
+
+On the Pi, from `/home/joshpi/argus`, install and **manually validate** the units
+before enabling unattended collection:
+
+```bash
+sudo install -m 0644 deploy/systemd/argus-collect.service /etc/systemd/system/argus-collect.service
+sudo install -m 0644 deploy/systemd/argus-collect.timer /etc/systemd/system/argus-collect.timer
+sudo systemd-analyze verify /etc/systemd/system/argus-collect.service /etc/systemd/system/argus-collect.timer
+systemd-analyze calendar '*:0/15'
+sudo systemctl daemon-reload
+sudo systemctl start argus-collect.service
+sudo systemctl status argus-collect.service --no-pager
+sudo journalctl -u argus-collect.service -n 50 --no-pager
+sudo systemctl status argus-collect.timer --no-pager
+```
+
+The manual service run should show `ARGUS COLLECTION COMPLETE` in the journal,
+and `argus history` should show the new snapshot. A failed service reports its
+error in the journal and exits nonzero. `systemd-analyze verify` and `calendar`
+check syntax and schedule on the Pi; they do not enable the timer.
+
+After manual validation, **enable unattended collection** with:
+
+```bash
+sudo systemctl enable --now argus-collect.timer
+systemctl list-timers argus-collect.timer --all
+sudo systemctl status argus-collect.timer --no-pager
+```
+
+To stop and disable the timer:
+
+```bash
+sudo systemctl disable --now argus-collect.timer
+```
+
+The service runs without root privileges; `joshpi` still needs access to Docker,
+CrowdSec, the system journal, and the database directory. Collector-returned
+error Evidence remains part of a stored snapshot under the existing policy.
+The lock coordinates invocations using the same database path; it does not
+prevent independent collection into another database path.
+
 ## Testing
 
 Run the complete automated test suite with:
 
 ```bash
 python -m unittest discover -s tests -v
+python -m pytest -q
 ```
 
 The automated tests mock subprocess and collector boundaries and do not require

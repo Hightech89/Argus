@@ -12,6 +12,7 @@ from argus.analysis import (
     select_event_window,
     select_historical_event_window,
 )
+from argus.collection_lock import collection_lock
 from argus.collectors import (
     collect_crowdsec_evidence,
     collect_docker_evidence,
@@ -71,16 +72,16 @@ def collect() -> None:
     try:
         database_path = default_database_path()
         database_path.parent.mkdir(parents=True, exist_ok=True)
+        with collection_lock(database_path):
+            store = EvidenceStore(database_path)
+            store.initialize()
+            collected_at = _utc_now()
 
-        store = EvidenceStore(database_path)
-        store.initialize()
-        collected_at = _utc_now()
-
-        docker_evidence = collect_docker_evidence()
-        crowdsec_evidence = collect_crowdsec_evidence()
-        linux_auth_evidence = collect_linux_auth_evidence()
-        evidence = [*docker_evidence, *crowdsec_evidence, *linux_auth_evidence]
-        collection_id = store.add_collection(evidence, collected_at=collected_at)
+            docker_evidence = collect_docker_evidence()
+            crowdsec_evidence = collect_crowdsec_evidence()
+            linux_auth_evidence = collect_linux_auth_evidence()
+            evidence = [*docker_evidence, *crowdsec_evidence, *linux_auth_evidence]
+            collection_id = store.add_collection(evidence, collected_at=collected_at)
     except Exception as error:
         typer.echo(f"ARGUS COLLECTION FAILED: {error}", err=True)
         raise typer.Exit(code=1) from error

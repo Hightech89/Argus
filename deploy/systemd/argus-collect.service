@@ -1,0 +1,9 @@
+[Unit]
+Description=Argus evidence collection snapshot
+
+[Service]
+Type=oneshot
+User=joshpi
+WorkingDirectory=/home/joshpi/argus
+Environment=HOME=/home/joshpi
+ExecStart=/home/joshpi/argus/.venv/bin/argus collect

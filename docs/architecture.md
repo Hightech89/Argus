@@ -104,6 +104,17 @@ Linux auth ─┘
 
 The store uses a caller-supplied SQLite file and deterministic insertion IDs.
 `argus collect` explicitly stores one Docker, CrowdSec, and Linux auth snapshot.
+For unattended operation, `deploy/systemd/argus-collect.service` invokes the
+same CLI as `joshpi` in a oneshot service. The corresponding calendar timer
+requests activation every 15 minutes and schedules one catch-up run after
+downtime. systemd does not overlap activations of that service; no Python daemon
+or custom scheduler is involved. A non-blocking OS advisory lock beside the
+database covers initialization, all collectors, and the atomic snapshot write.
+Thus a concurrent manual invocation using the same database path fails before
+collecting or creating another run. Process exit releases the lock, including
+after failure. SQLite transaction failures still return nonzero, and systemd
+records CLI stdout/stderr and exit status. Deployment is explicit; repository
+files do not install or enable the timer.
 `argus brief` and `argus daily` remain read-only, `SecurityEvent` records are not
 persisted, and duplicate Evidence rows are intentionally preserved.
 `default_database_path()` resolves a nonblank

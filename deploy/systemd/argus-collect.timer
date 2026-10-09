@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect Argus evidence every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+AccuracySec=1s
+Persistent=true
+Unit=argus-collect.service
+
+[Install]
+WantedBy=timers.target
