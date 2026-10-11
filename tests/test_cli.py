@@ -262,7 +262,7 @@ class CollectCommandTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.output)
             linux_collector.assert_called_once_with()
             self.assertIn("Evidence stored: 3", result.output)
-            self.assertIn("Linux auth records: 1", result.output)
+            self.assertIn("Linux auth records collected: 1", result.output)
             store = EvidenceStore(database_path)
             self.assertEqual(store.list_collection_evidence(1), (docker, crowdsec, linux))
             self.assertEqual(len(store.list_collections()), 1)
@@ -281,7 +281,7 @@ class CollectCommandTests(unittest.TestCase):
                 result = self.runner.invoke(app, ["collect"])
 
             self.assertEqual(result.exit_code, 0, result.output)
-            self.assertIn("Linux auth records: 1", result.output)
+            self.assertIn("Linux auth records collected: 1", result.output)
             self.assertEqual(
                 EvidenceStore(database_path).list_collection_evidence(1), (linux_error,)
             )
@@ -305,6 +305,7 @@ class CollectCommandTests(unittest.TestCase):
             crowdsec = [Evidence("crowdsec.first", "3")]
             store = MagicMock()
             store.add_collection.return_value = 12
+            store.list_collection_evidence.return_value = (*docker, *crowdsec)
             call_order: list[str] = []
             store.initialize.side_effect = lambda: call_order.append("initialize")
 
@@ -343,6 +344,7 @@ class CollectCommandTests(unittest.TestCase):
         self.assertIn("ARGUS COLLECTION COMPLETE", result.output)
         self.assertIn("Collection: 12", result.output)
         self.assertIn("Evidence stored: 3", result.output)
+        self.assertIn("Evidence collected: 3", result.output)
         self.assertIn("Docker records: 2", result.output)
         self.assertIn("CrowdSec records: 1", result.output)
         self.assertIn(f"Database: {database_path}", result.output)
@@ -385,6 +387,32 @@ class CollectCommandTests(unittest.TestCase):
                 EvidenceStore(database_path).list_collection_evidence(1),
                 (docker_error, crowdsec_error),
             )
+
+    def test_collect_reports_collected_and_stored_counts_after_cursor_dedup(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "argus.db"
+            journal = Evidence(
+                "linux.auth.raw",
+                '{"__CURSOR":"cursor-a","MESSAGE":"Invalid user alice from 192.0.2.1 port 22"}',
+                _NOW,
+            )
+            status = Evidence("linux.auth.available", "true", _NOW)
+            with (
+                patch("argus.cli.default_database_path", return_value=database_path),
+                patch("argus.cli.collect_docker_evidence", return_value=[]),
+                patch("argus.cli.collect_crowdsec_evidence", return_value=[]),
+                patch("argus.cli.collect_linux_auth_evidence", return_value=[status, journal]),
+            ):
+                first = self.runner.invoke(app, ["collect"])
+                second = self.runner.invoke(app, ["collect"])
+
+            self.assertEqual(first.exit_code, 0, first.output)
+            self.assertEqual(second.exit_code, 0, second.output)
+            self.assertIn("Evidence collected: 2", second.output)
+            self.assertIn("Evidence stored: 1", second.output)
+            self.assertIn("Linux auth records collected: 2", second.output)
+            self.assertIn("Linux auth records stored: 1", second.output)
+            self.assertEqual(len(EvidenceStore(database_path).list_collections()), 2)
 
     def test_storage_failure_exits_nonzero_without_success_output(self) -> None:
         with TemporaryDirectory() as temporary_directory:

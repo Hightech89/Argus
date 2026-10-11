@@ -1,7 +1,9 @@
 """Command-line interface for Argus."""
 
+import shutil
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
+from pathlib import Path
 
 import typer
 
@@ -21,7 +23,9 @@ from argus.collectors import (
 from argus.events import crowdsec_events_from_evidence, linux_auth_events_from_evidence
 from argus.models import SecurityEvent
 from argus.report import render_brief, render_daily_security_brief, render_investigation
-from argus.storage import EvidenceStore, default_database_path
+from argus.storage import EvidenceStore, StorageCounts, default_database_path
+
+LOW_SPACE_WARNING_BYTES = 1024**3
 
 app = typer.Typer(
     help="Evidence-driven Security Operations Copilot for Home SOC environments."
@@ -82,6 +86,7 @@ def collect() -> None:
             linux_auth_evidence = collect_linux_auth_evidence()
             evidence = [*docker_evidence, *crowdsec_evidence, *linux_auth_evidence]
             collection_id = store.add_collection(evidence, collected_at=collected_at)
+            stored_evidence = store.list_collection_evidence(collection_id)
     except Exception as error:
         typer.echo(f"ARGUS COLLECTION FAILED: {error}", err=True)
         raise typer.Exit(code=1) from error
@@ -92,14 +97,65 @@ def collect() -> None:
                 "ARGUS COLLECTION COMPLETE",
                 "",
                 f"Collection: {collection_id}",
-                f"Evidence stored: {len(evidence)}",
+                f"Evidence collected: {len(evidence)}",
+                f"Evidence stored: {len(stored_evidence)}",
                 f"Docker records: {len(docker_evidence)}",
                 f"CrowdSec records: {len(crowdsec_evidence)}",
-                f"Linux auth records: {len(linux_auth_evidence)}",
+                f"Linux auth records collected: {len(linux_auth_evidence)}",
+                "Linux auth records stored: "
+                f"{sum(record.source.startswith('linux.auth.') for record in stored_evidence)}",
                 f"Database: {database_path}",
             )
         )
     )
+
+
+@app.command()
+def storage() -> None:
+    """Report local SQLite size, evidence counts, and available disk space."""
+    try:
+        database_path = default_database_path()
+        if database_path.exists() and not database_path.is_file():
+            raise OSError(f"database path is not a file: {database_path}")
+        exists = database_path.is_file()
+        counts = (
+            EvidenceStore(database_path).storage_counts()
+            if exists else StorageCounts(0, 0, ())
+        )
+        database_bytes = database_path.stat().st_size if exists else 0
+        auxiliary_bytes = sum(
+            auxiliary.stat().st_size
+            for suffix in ("-wal", "-shm", "-journal")
+            if (auxiliary := Path(f"{database_path}{suffix}")).is_file()
+        )
+        filesystem_path = database_path.parent
+        while not filesystem_path.exists():
+            filesystem_path = filesystem_path.parent
+        available_bytes = shutil.disk_usage(filesystem_path).free
+    except Exception as error:
+        typer.echo(f"ARGUS STORAGE FAILED: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    lines = [
+        "ARGUS STORAGE",
+        "",
+        f"Database: {database_path}",
+        f"Database file size: {database_bytes} bytes",
+        f"SQLite auxiliary files: {auxiliary_bytes} bytes",
+        f"Total SQLite files: {database_bytes + auxiliary_bytes} bytes",
+        f"Available filesystem space: {available_bytes} bytes",
+        f"Collection runs: {counts.collection_runs}",
+        f"Evidence records: {counts.evidence_records}",
+        "Evidence by source:",
+        *(f"  {source}: {count}" for source, count in counts.by_source),
+    ]
+    if not counts.by_source:
+        lines.append("  None")
+    if not exists:
+        lines.append("No database found; run `argus collect` to create one.")
+    if available_bytes < LOW_SPACE_WARNING_BYTES:
+        lines.append("WARNING: available disk space is below 1 GiB.")
+    typer.echo("\n".join(lines))
 
 
 @app.command()

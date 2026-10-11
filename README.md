@@ -36,6 +36,7 @@ Five CLI commands are available:
   counts.
 - `argus investigate` reconstructs historical CrowdSec and Linux SSH security
   events from stored observations.
+- `argus storage` reports database size, evidence counts, and available disk space.
 
 The Daily Security Brief pipeline is:
 
@@ -102,6 +103,7 @@ argus daily
 argus collect
 argus history
 argus investigate
+argus storage
 ```
 
 Representative `argus brief` header:
@@ -172,6 +174,64 @@ argus collect
 
 `argus daily` reads CrowdSec telemetry through the existing CrowdSec container
 and does not require a separate API integration.
+
+## Storage efficiency and monitoring
+
+Every `argus collect` still creates an auditable collection run. The SSH journal
+collector reads the previous 24 hours on each invocation, so the same journal
+record can recur across many 15-minute runs. For `linux.auth.raw` only, storage
+uses a nonblank string `__CURSOR` as authoritative identity and stores its raw
+Evidence on the first encounter. A later row with the same cursor is not stored
+again. The first row keeps its complete raw content and observation timestamp;
+source timestamps still represent occurrence, and observation timestamps do
+not become occurrence times. A run with no new raw journal rows still exists.
+Cursorless, malformed, and unusable-cursor rows are stored every time. Docker
+and CrowdSec Evidence retain their existing per-snapshot behavior. The
+`argus collect` output distinguishes `Evidence collected` from `Evidence stored`
+and reports both collected and stored Linux auth record counts. `argus history`
+continues to count stored Evidence per run, so a repeated journal row is absent
+from that run's Evidence count.
+
+Run `argus storage` to inspect the configured database without running
+collectors or writing Evidence. It shows the main SQLite file size, current
+`-wal`, `-shm`, and `-journal` sidecar sizes when present, their combined size,
+available space on the database filesystem, run and Evidence totals, and counts
+by exact Evidence source. It warns below **1 GiB** of available space. These
+SQLite file sizes are a snapshot, not total Argus disk usage; lock files,
+backups, and filesystem overhead are excluded. Historical duplicate rows remain
+in existing databases and are never deleted automatically. A repeated cursor
+is attributed to its earliest stored row; Argus does not retain a separate
+per-cursor observation for every subsequent run.
+
+The first `argus collect` after upgrading an existing database creates and
+backfills a small cursor index in one SQLite transaction. It leaves existing
+Evidence and CollectionRun rows unchanged, including old duplicates. Before a
+Home SOC upgrade, use a maintenance window: stop the timer, wait for any active
+service run to finish, and make a SQLite backup as `joshpi` before installing
+the new code. For example:
+
+```bash
+sudo systemctl stop argus-collect.timer
+while sudo systemctl is-active --quiet argus-collect.service; do sleep 1; done
+sudo systemctl status argus-collect.service --no-pager
+/home/joshpi/argus/.venv/bin/python - <<'PY'
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+database = Path('/home/joshpi/.argus/argus.db')
+backup_path = database.with_name('argus.db.pre-cursor-upgrade')
+if backup_path.exists():
+    raise SystemExit(f'Backup already exists: {backup_path}')
+with closing(sqlite3.connect(database)) as source, closing(sqlite3.connect(backup_path)) as backup:
+    source.backup(backup)
+PY
+```
+
+After upgrading the code, run one manual `argus collect`, then check
+`argus storage`, `argus history`, and `argus investigate --all`. Start the timer
+again only after those checks pass: `sudo systemctl start argus-collect.timer`.
+The commands above are guidance; this repository change does not touch the
+running Pi timer or database.
 
 ## Scheduled collection on the Raspberry Pi
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +27,13 @@ CREATE TABLE IF NOT EXISTS evidence (
     content TEXT NOT NULL,
     observed_at TEXT NULL,
     collection_id INTEGER NULL REFERENCES collection_runs(id)
+)
+"""
+
+_CREATE_LINUX_AUTH_CURSORS_TABLE = """
+CREATE TABLE IF NOT EXISTS linux_auth_cursors (
+    cursor TEXT PRIMARY KEY,
+    evidence_id INTEGER NOT NULL REFERENCES evidence(id)
 )
 """
 
@@ -48,6 +57,13 @@ def default_database_path() -> Path:
     return Path.home() / ".argus" / "argus.db"
 
 
+@dataclass(frozen=True)
+class StorageCounts:
+    collection_runs: int
+    evidence_records: int
+    by_source: tuple[tuple[str, int], ...]
+
+
 class EvidenceStore:
     """Explicit SQLite storage for Evidence records."""
 
@@ -66,6 +82,23 @@ class EvidenceStore:
                     "ALTER TABLE evidence ADD COLUMN collection_id INTEGER NULL "
                     "REFERENCES collection_runs(id)"
                 )
+            has_cursor_index = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'linux_auth_cursors'"
+            ).fetchone()
+            connection.execute(_CREATE_LINUX_AUTH_CURSORS_TABLE)
+            if not has_cursor_index:
+                for evidence_id, content in connection.execute(
+                    "SELECT id, content FROM evidence "
+                    "WHERE source = 'linux.auth.raw' ORDER BY id"
+                ):
+                    cursor = _journal_cursor(content)
+                    if cursor is not None:
+                        connection.execute(
+                            "INSERT OR IGNORE INTO linux_auth_cursors (cursor, evidence_id) "
+                            "VALUES (?, ?)",
+                            (cursor, evidence_id),
+                        )
 
     def add(self, evidence: Evidence) -> int:
         """Persist one Evidence record and return its insertion ID."""
@@ -73,6 +106,7 @@ class EvidenceStore:
             cursor = connection.execute(_INSERT_EVIDENCE, _evidence_values(evidence))
             if cursor.lastrowid is None:
                 raise RuntimeError("SQLite did not return an Evidence row ID")
+            _register_journal_cursor(connection, evidence, cursor.lastrowid)
             return cursor.lastrowid
 
     def add_many(self, evidence: Iterable[Evidence]) -> tuple[int, ...]:
@@ -86,6 +120,7 @@ class EvidenceStore:
                 )
                 if cursor.lastrowid is None:
                     raise RuntimeError("SQLite did not return an Evidence row ID")
+                _register_journal_cursor(connection, record, cursor.lastrowid)
                 inserted_ids.append(cursor.lastrowid)
         return tuple(inserted_ids)
 
@@ -106,12 +141,54 @@ class EvidenceStore:
             if collection_id is None:
                 raise RuntimeError("SQLite did not return a collection run ID")
             for record in evidence:
-                connection.execute(
+                journal_cursor = (
+                    _journal_cursor(record.content)
+                    if record.source == "linux.auth.raw" else None
+                )
+                already_stored = (
+                    journal_cursor is not None
+                    and connection.execute(
+                        "SELECT 1 FROM linux_auth_cursors WHERE cursor = ?",
+                        (journal_cursor,),
+                    ).fetchone()
+                )
+                if already_stored:
+                    continue
+                evidence_cursor = connection.execute(
                     "INSERT INTO evidence "
                     "(source, content, observed_at, collection_id) VALUES (?, ?, ?, ?)",
                     (*_evidence_values(record), collection_id),
                 )
+                if journal_cursor is not None:
+                    connection.execute(
+                        "INSERT INTO linux_auth_cursors (cursor, evidence_id) VALUES (?, ?)",
+                        (journal_cursor, evidence_cursor.lastrowid),
+                    )
         return collection_id
+
+    def storage_counts(self) -> StorageCounts:
+        """Return read-only record counts, including empty pre-schema databases."""
+        with self._connection(read_only=True) as connection:
+            tables = {
+                row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            runs = 0
+            if "collection_runs" in tables:
+                runs = connection.execute(
+                    "SELECT COUNT(*) FROM collection_runs"
+                ).fetchone()[0]
+            by_source = (
+                tuple(
+                    connection.execute(
+                        "SELECT source, COUNT(*) FROM evidence "
+                        "GROUP BY source ORDER BY source"
+                    )
+                )
+                if "evidence" in tables else ()
+            )
+        return StorageCounts(runs, sum(count for _, count in by_source), by_source)
 
     def list_collection_evidence(self, collection_id: int) -> tuple[Evidence, ...]:
         """Return a snapshot's observations in insertion order, or an empty tuple."""
@@ -144,15 +221,45 @@ class EvidenceStore:
         return tuple(_evidence_from_row(row) for row in rows)
 
     @contextmanager
-    def _connection(self, *, create: bool = False) -> Iterator[sqlite3.Connection]:
+    def _connection(
+        self, *, create: bool = False, read_only: bool = False
+    ) -> Iterator[sqlite3.Connection]:
         if not create and not self.path.is_file():
             raise RuntimeError("EvidenceStore must be initialized before use")
-        connection = sqlite3.connect(self.path)
+        connection = (
+            sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
+            if read_only
+            else sqlite3.connect(self.path)
+        )
         try:
             connection.execute("PRAGMA foreign_keys = ON")
             yield connection
         finally:
             connection.close()
+
+
+def _journal_cursor(content: str) -> str | None:
+    try:
+        journal = json.loads(content)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(journal, dict):
+        return None
+    cursor = journal.get("__CURSOR")
+    return cursor.strip() if isinstance(cursor, str) and cursor.strip() else None
+
+
+def _register_journal_cursor(
+    connection: sqlite3.Connection, evidence: Evidence, evidence_id: int
+) -> None:
+    if evidence.source != "linux.auth.raw":
+        return
+    cursor = _journal_cursor(evidence.content)
+    if cursor is not None:
+        connection.execute(
+            "INSERT OR IGNORE INTO linux_auth_cursors (cursor, evidence_id) VALUES (?, ?)",
+            (cursor, evidence_id),
+        )
 
 
 def _evidence_from_row(row: tuple[str, str, str | None]) -> Evidence:

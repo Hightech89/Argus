@@ -52,9 +52,9 @@ assert sameness. No fallback hash or heuristic identity is generated.
 `argus.analysis.deduplicate_events()` produces a derived event view: it keeps
 the first occurrence of each identity in caller-supplied input order and every
 event with `identity=None`, returning an immutable tuple of the original events.
-It does not mutate or merge events or their evidence. Evidence observations are
-always preserved in SQLite, including duplicates. Live `argus daily` does not
-apply this deduplication view.
+It does not mutate or merge events or their evidence. Existing Evidence rows
+are never deleted or rewritten. Live `argus daily` does not apply this
+deduplication view.
 
 `Evidence.observed_at` is the timezone-aware UTC time Argus began a collector
 invocation. Every record from that invocation shares the same observation time;
@@ -77,9 +77,9 @@ array is present, the first decision object supplies decision details. Missing,
 blank, structured, or otherwise unusable optional values are omitted. The raw
 Evidence record remains unchanged and attached to the event.
 
-Linux auth collection runs local `journalctl` for `SYSLOG_IDENTIFIER=sshd` over
-the previous 24 hours. Every valid journal JSON object is preserved as one
-`linux.auth.raw` Evidence observation. Supported OpenSSH messages produce
+Linux auth collection runs local `journalctl` for `SYSLOG_IDENTIFIER=sshd` and
+`sshd-session` over the previous 24 hours. Every valid journal JSON object is
+returned as one `linux.auth.raw` Evidence observation. Supported OpenSSH messages produce
 successful login, failed login, or invalid user `SecurityEvent` records with
 fixed `event_type`, `username`, `remote_ip`, and applicable `auth_method` details.
 Journald `__REALTIME_TIMESTAMP` provides UTC source time when usable; otherwise
@@ -116,19 +116,34 @@ after failure. SQLite transaction failures still return nonzero, and systemd
 records CLI stdout/stderr and exit status. Deployment is explicit; repository
 files do not install or enable the timer.
 `argus brief` and `argus daily` remain read-only, `SecurityEvent` records are not
-persisted, and duplicate Evidence rows are intentionally preserved.
+persisted, and previously stored duplicate Evidence rows are preserved.
 `default_database_path()` resolves a nonblank
 `ARGUS_DB_PATH` override or defaults to `~/.argus/argus.db`.
 
 Collection runs are snapshot boundaries, not incidents, unique alerts, or
 deduplicated events. `add_collection()` stores one run with its timezone-aware
-collection time and all Evidence observations in a single transaction;
-`list_collection_evidence()` retrieves them in insertion order. Duplicate
-Evidence across runs remains valid; storage never deduplicates observations.
+collection time and all eligible Evidence observations in a single transaction;
+`list_collection_evidence()` retrieves them in insertion order. For
+`linux.auth.raw` only, a nonblank string `__CURSOR` provides authoritative
+storage identity. The first raw row is retained in full; later rows with the
+same trimmed cursor are not stored. The cursor index is backfilled from the
+earliest existing row per cursor in an atomic, non-destructive schema upgrade.
+Previously stored duplicates remain. Cursorless, malformed, and unusable-cursor
+rows are always stored. Docker and CrowdSec persistence is unchanged.
 Standalone `add()` and `add_many()` records have no collection association.
-Initialization upgrades existing databases in place, preserving their Evidence.
+They keep their existing insert behavior and register any usable raw journal
+cursor for later collection deduplication. A failed snapshot rolls back its run,
+Evidence, and cursor entries together. Initialization upgrades existing databases
+in place, preserving their Evidence.
 The stored records are observations, not unique incidents. `argus brief` and
 `argus daily` do not persist their observations.
+`argus collect` reports collected and newly stored counts separately.
+`argus storage` uses a read-only SQLite connection to report run and Evidence
+counts by exact source, main database and current WAL/SHM/journal file sizes,
+and filesystem free space. It warns below 1 GiB free. Sidecar sizes may change
+while measured, and lock files, backups, and filesystem overhead are excluded.
+Collection runs do not record exactly which previously seen cursors recurred;
+only the earliest stored raw observation is available for investigation.
 `argus history` reads recent `CollectionRun` records and reports their stored
 Evidence counts by source family. It does not interpret observations as
 incidents, deduplicate them, calculate trends, or persist `SecurityEvent`

@@ -216,6 +216,31 @@ class InvestigationCommandTests(unittest.TestCase):
         self.assertEqual(result.output.count("SSH invalid user"), 1)
         self.assertIn(f"Collection: {first}", result.output)
 
+    def test_new_cursor_storage_dedup_keeps_historical_investigation(self) -> None:
+        first = self._save([_linux(cursor="cursor-a", occurred_at=_NOW)])
+        second = self._save([_linux(cursor="cursor-a", occurred_at=_NOW)])
+
+        self.assertEqual(self.store.list_collection_evidence(second), ())
+        result = self._invoke()
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Matching events: 1", result.output)
+        self.assertIn(f"Collection: {first}", result.output)
+        self.assertNotIn(f"Collection: {second}", result.output)
+
+    def test_repeated_cursor_keeps_first_observation_time_when_source_time_missing(self) -> None:
+        first_observation = _NOW - timedelta(hours=2)
+        self._save([_linux(cursor="cursor-observed", observed_at=first_observation)])
+        self._save([_linux(cursor="cursor-observed", observed_at=_NOW)])
+
+        recent = self._invoke("--hours", "1")
+        wider = self._invoke("--hours", "3")
+
+        self.assertIn("Matching events: 0", recent.output)
+        self.assertIn("Matching events: 1", wider.output)
+        self.assertIn(first_observation.isoformat(), wider.output)
+        self.assertIn("OBSERVED (observation time; occurrence unknown)", wider.output)
+
     def test_unkeyed_events_are_all_retained(self) -> None:
         first = self._save([_crowdsec(message="Unkeyed repeated")])
         second = self._save(
