@@ -164,6 +164,21 @@ The report shows window bounds, matching count before the limit, and displayed
 count. The command reads stored Evidence only; no event rows or schema changes
 are involved.
 
+`argus.historical.reconstruct_historical_events()` provides that same read-only
+reconstruction, earliest-identity selection, inclusive window, and stable
+newest-first ordering to `argus summary`. Unlike investigation, summary passes
+all matching attributed events to the pure `build_security_summary()` analysis
+function. It counts SSH success, failure, invalid-user, CrowdSec, severity,
+and unclassified events separately; groups only structured IP details; and
+retains collection IDs and source identities as finding references. Three
+failed SSH logins from one IP form a repeated-failure observation. A failure
+followed by success requires SOURCE timestamps in strict order within 15
+minutes; it is not a compromise verdict. Up to five recent CrowdSec detections
+are highlighted. `argus.report` only renders the resulting immutable summary.
+Collection coverage uses stored collection timestamps in the selected window,
+which are not a guarantee of continuous monitoring. No schema or timer change
+is required for this report.
+
 Rolling windows use inclusive cutoff and current-time boundaries. Events with
 source timestamps are selected as known occurrences; events using observation
 time are selected separately because their actual occurrence time is unknown.

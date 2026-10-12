@@ -25,7 +25,7 @@ The current read-only collectors are:
 - CrowdSec
 - Linux SSH authentication via the local systemd journal
 
-Five CLI commands are available:
+Seven CLI commands are available:
 
 - `argus brief` reports current Docker and CrowdSec operational status.
 - `argus daily` produces a deterministic rolling 24-hour CrowdSec and Linux SSH
@@ -37,6 +37,7 @@ Five CLI commands are available:
 - `argus investigate` reconstructs historical CrowdSec and Linux SSH security
   events from stored observations.
 - `argus storage` reports database size, evidence counts, and available disk space.
+- `argus summary` gives a deterministic historical security activity report.
 
 The Daily Security Brief pipeline is:
 
@@ -104,6 +105,7 @@ argus collect
 argus history
 argus investigate
 argus storage
+argus summary
 ```
 
 Representative `argus brief` header:
@@ -174,6 +176,39 @@ argus collect
 
 `argus daily` reads CrowdSec telemetry through the existing CrowdSec container
 and does not require a separate API integration.
+
+## Historical security summary
+
+`argus summary` reconstructs CrowdSec and Linux SSH events from stored Evidence
+without running collectors or modifying the database. It uses the same
+identity deduplication and inclusive UTC event-time selection as
+`argus investigate`, but calculates over **all** matching events rather than
+the first 100 displayed there. The default is the previous 24 hours:
+
+```bash
+argus summary
+argus summary --hours 48
+argus summary --hours 168
+argus summary --all
+```
+
+`--hours` requires a positive integer and cannot be combined with `--all`.
+The report shows deduplicated event totals, successful/failed/invalid-user SSH
+counts, CrowdSec alert counts, severity counts, and up to five source IPs.
+Structured SSH `remote_ip` and CrowdSec IP source details supply those IPs;
+CrowdSec detections are counted separately from SSH authentication events.
+Other or unclassified event types remain visible in their own count.
+
+Noteworthy observations include at least **three** failed SSH authentication
+events from one IP, a SOURCE-timestamped failure followed by a SOURCE-timestamped
+success from the same IP within **15 minutes**, and up to five recent CrowdSec
+detections with available scenario, source, and severity. These are deterministic
+observations, not incident or compromise claims. Each finding cites stored
+collection IDs and existing authoritative identities when available. SOURCE
+timestamps are occurrence times; OBSERVED timestamps only establish when Argus
+saw a record. Collection timestamps describe stored observation coverage and
+do not prove continuous monitoring or complete source activity. A zero-event
+report does not mean the system is secure.
 
 ## Storage efficiency and monitoring
 

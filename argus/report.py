@@ -7,6 +7,7 @@ from datetime import datetime
 
 from argus.analysis import DailySecurityBrief
 from argus.models import Evidence, SecurityEvent, Severity, TimestampBasis
+from argus.security_summary import EventReference, SecuritySummary
 
 CHECK = "\u2713"
 BULLET = "\u2022"
@@ -123,6 +124,112 @@ def render_investigation(
         )
         lines.extend(_render_event_details(event.details))
     return "\n".join(lines)
+
+
+def render_security_summary(summary: SecuritySummary) -> str:
+    """Render structured historical activity without incident claims."""
+    window = (
+        f"{summary.window_start.isoformat()} -> {summary.window_end.isoformat()} (inclusive UTC)"
+        if summary.window_start is not None else "All stored history"
+    )
+    lines = [
+        "ARGUS SECURITY SUMMARY",
+        "",
+        f"Investigation window: {window}",
+        f"Reference time (UTC): {summary.window_end.isoformat()}",
+        "",
+        "Collection coverage (stored timestamps only)",
+        f"Runs in window: {summary.collection_count}",
+        f"Earliest collection: {_optional_time(summary.earliest_collection)}",
+        f"Latest collection: {_optional_time(summary.latest_collection)}",
+        "Collection times describe observations, not proof that all activity was captured.",
+        "",
+        f"Total deduplicated security events: {summary.total_events}",
+        f"SOURCE occurrence timestamps: {summary.source_timestamp_count}",
+        f"OBSERVED observation timestamps (occurrence unknown): {summary.observed_timestamp_count}",
+        f"Successful SSH authentications: {summary.ssh_successes}",
+        f"Failed SSH authentications: {summary.ssh_failures}",
+        f"Invalid SSH usernames: {summary.ssh_invalid_users}",
+        f"CrowdSec alerts: {summary.crowdsec_alerts}",
+        f"Other/unclassified events: {summary.unclassified_events}",
+        "These are deduplicated event observations, not unique incidents or attacks.",
+        "",
+        "Severity",
+        *(f"{severity.value.capitalize()}: {count}" for severity, count in summary.severity_counts),
+        "",
+        "Top source IPs (SSH events and CrowdSec alerts counted separately)",
+    ]
+    if summary.top_ips:
+        lines.extend(
+            f"{item.address}: SSH {item.ssh_events}; CrowdSec {item.crowdsec_alerts}"
+            for item in summary.top_ips
+        )
+    else:
+        lines.append("None with a structured IP address")
+
+    lines.extend(["", "Noteworthy observations"])
+    if not summary.total_events:
+        if summary.all_collection_count == 0:
+            lines.append("No stored collections found.")
+        elif summary.collection_count == 0:
+            lines.append("Stored collections exist, but none fall within the selected window.")
+        else:
+            lines.append("No matching security events in the selected window.")
+    lines.append("Repeated SSH authentication failures (3 or more from one IP)")
+    if summary.repeated_failures:
+        for finding in summary.repeated_failures:
+            lines.extend([
+                f"{BULLET} {finding.address}: {finding.count} failed SSH authentications; "
+                f"first {finding.first.timestamp.isoformat()}, last {finding.last.timestamp.isoformat()}",
+                f"  Evidence: {_event_reference(finding.first)}; {_event_reference(finding.last)}",
+            ])
+    else:
+        lines.append("None")
+
+    lines.append("Failure followed by success (same IP, within 15 minutes)")
+    if summary.failure_then_success:
+        for finding in summary.failure_then_success:
+            lines.extend([
+                f"{BULLET} {finding.address}: failure {finding.failure.timestamp.isoformat()} "
+                f"then success {finding.success.timestamp.isoformat()}; "
+                "temporal observation only, not a confirmed compromise.",
+                f"  Evidence: {_event_reference(finding.failure)}; "
+                f"{_event_reference(finding.success)}",
+            ])
+    else:
+        lines.append("None")
+
+    lines.append("Recent CrowdSec detections (up to 5)")
+    if summary.crowdsec_detections:
+        for finding in summary.crowdsec_detections:
+            context = "; ".join(
+                part for part in (
+                    f"scenario {finding.scenario}" if finding.scenario else "",
+                    f"source {finding.source}" if finding.source else "",
+                ) if part
+            )
+            lines.extend([
+                f"{BULLET} {finding.reference.timestamp.isoformat()} | "
+                f"{finding.severity.value} | {finding.summary}"
+                + (f"; {context}" if context else ""),
+                f"  Evidence: {_event_reference(finding.reference)}",
+            ])
+    else:
+        lines.append("None")
+    return "\n".join(lines)
+
+
+def _optional_time(value: datetime | None) -> str:
+    return value.isoformat() if value is not None else "None"
+
+
+def _event_reference(reference: EventReference) -> str:
+    basis = "SOURCE occurrence" if reference.timestamp_basis is TimestampBasis.SOURCE else "OBSERVED observation"
+    identity = f", identity {reference.identity}" if reference.identity is not None else ""
+    return (
+        f"Collection {reference.collection_id}{identity}, "
+        f"{basis} {reference.timestamp.isoformat()}"
+    )
 
 
 def render_brief(evidence: Iterable[Evidence], version: str) -> str:

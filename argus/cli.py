@@ -10,9 +10,7 @@ import typer
 from argus import __version__
 from argus.analysis import (
     build_daily_security_brief,
-    deduplicate_events,
     select_event_window,
-    select_historical_event_window,
 )
 from argus.collection_lock import collection_lock
 from argus.collectors import (
@@ -21,8 +19,14 @@ from argus.collectors import (
     collect_linux_auth_evidence,
 )
 from argus.events import crowdsec_events_from_evidence, linux_auth_events_from_evidence
-from argus.models import SecurityEvent
-from argus.report import render_brief, render_daily_security_brief, render_investigation
+from argus.historical import reconstruct_historical_events
+from argus.report import (
+    render_brief,
+    render_daily_security_brief,
+    render_investigation,
+    render_security_summary,
+)
+from argus.security_summary import build_security_summary
 from argus.storage import EvidenceStore, StorageCounts, default_database_path
 
 LOW_SPACE_WARNING_BYTES = 1024**3
@@ -234,40 +238,13 @@ def investigate(
         lookback = timedelta(hours=hours if hours is not None else 24)
         window_start = None if all_history else now - lookback
         database_path = default_database_path()
-        candidates: list[tuple[SecurityEvent, int]] = []
-        if database_path.is_file():
-            store = EvidenceStore(database_path)
-            for collection in reversed(store.list_collections()):
-                evidence = store.list_collection_evidence(collection.id)
-                if source in (InvestigationSource.ALL, InvestigationSource.CROWDSEC):
-                    candidates.extend(
-                        (event, collection.id)
-                        for event in crowdsec_events_from_evidence(evidence)
-                    )
-                if source in (InvestigationSource.ALL, InvestigationSource.LINUX_AUTH):
-                    candidates.extend(
-                        (event, collection.id)
-                        for event in linux_auth_events_from_evidence(evidence)
-                    )
-
-        retained = deduplicate_events(event for event, _ in candidates)
-        # Equal-valued observations still have distinct event objects and provenance.
-        collection_by_event = {
-            id(event): collection_id for event, collection_id in candidates
-        }
-        attributed = tuple((event, collection_by_event[id(event)]) for event in retained)
-        matching = (
-            attributed
-            if all_history
-            else select_historical_event_window(
-                attributed, now=now, window=lookback
-            )
+        selection = reconstruct_historical_events(
+            EvidenceStore(database_path) if database_path.is_file() else None,
+            source=source.value,
+            now=now,
+            window=None if all_history else lookback,
         )
-        displayed = sorted(
-            matching,
-            key=lambda item: item[0].timestamp,
-            reverse=True,
-        )[:limit]
+        displayed = selection.events[:limit]
     except Exception as error:
         typer.echo(f"ARGUS INVESTIGATION FAILED: {error}", err=True)
         raise typer.Exit(code=1) from error
@@ -277,9 +254,47 @@ def investigate(
             displayed,
             window_start=window_start,
             window_end=now,
-            matching_total=len(matching),
+            matching_total=len(selection.events),
         )
     )
+
+
+@app.command()
+def summary(
+    hours: int | None = typer.Option(
+        None, min=1, help="Look back this many hours (default: 24)."
+    ),
+    all_history: bool = typer.Option(
+        False, "--all", help="Summarize all stored history."
+    ),
+) -> None:
+    """Summarize stored security activity without live collection."""
+    if hours is not None and all_history:
+        raise typer.BadParameter(
+            "--hours cannot be combined with --all", param_hint="--hours"
+        )
+    try:
+        now = _utc_now()
+        lookback = timedelta(hours=hours if hours is not None else 24)
+        window_start = None if all_history else now - lookback
+        database_path = default_database_path()
+        selection = reconstruct_historical_events(
+            EvidenceStore(database_path) if database_path.is_file() else None,
+            source="all",
+            now=now,
+            window=None if all_history else lookback,
+        )
+        report = build_security_summary(
+            selection.events,
+            selection.collections,
+            window_start=window_start,
+            window_end=now,
+            all_collection_count=selection.all_collection_count,
+        )
+    except Exception as error:
+        typer.echo(f"ARGUS SUMMARY FAILED: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(render_security_summary(report))
 
 
 def _empty_history() -> str:
